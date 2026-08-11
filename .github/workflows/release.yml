@@ -124,6 +124,7 @@ jobs:
           uploadUpdaterJson: true
           releaseDraft: false
           prerelease: false
+          updaterJsonUrl: "https://github.com/monochrome-music/desktop-app/releases/latest/download/latest.json"
           includeAppImage: true
           includeDeb: true
           includeRpm: true
