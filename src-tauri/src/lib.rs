@@ -57,11 +57,11 @@ pub fn run() {
         ])
 
         .setup(|app| {
-            let app_handle = app.handle().clone();
+            let updater_handle = app.handle().clone();
 
             #[cfg(not(debug_assertions))]
             tauri::async_runtime::spawn(async move {
-                if let Ok(updater) = app_handle.updater() {
+                if let Ok(updater) = updater_handle.updater() {
                     if let Ok(Some(update)) = updater.check().await {
                         println!("Update found: {}", update.version);
 
@@ -71,11 +71,13 @@ pub fn run() {
                             .is_ok()
                         {
                             println!("Update installed. Restarting...");
-                            app_handle.restart();
+                            updater_handle.restart();
                         }
                     }
                 }
             });
+
+            let window_handle = app.handle().clone();
 
             WebviewWindowBuilder::new(
                 app,
@@ -95,7 +97,7 @@ pub fn run() {
                 );
 
                 let window = WebviewWindowBuilder::new(
-                    &app_handle,
+                    &window_handle,
                     label,
                     WebviewUrl::External(url),
                 )
