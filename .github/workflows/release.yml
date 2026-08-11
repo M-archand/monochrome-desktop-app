@@ -122,6 +122,8 @@ jobs:
           releaseName: ${{ steps.version.outputs.version }}
           generateReleaseNotes: true
           uploadUpdaterJson: true
+          releaseDraft: false
+          prerelease: false
           includeAppImage: true
           includeDeb: true
           includeRpm: true
