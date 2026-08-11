@@ -119,7 +119,7 @@ jobs:
           tagName: ${{ steps.version.outputs.version }}
           releaseName: ${{ steps.version.outputs.version }}
           generateReleaseNotes: true
-          uploadUpdaterJson: false
+          uploadUpdaterJson: true
           includeAppImage: true
           includeDeb: true
           includeRpm: true
