@@ -51,14 +51,12 @@ jobs:
 
           rm -rf temp-external-repo
 
-      - name: Bump version numbers
+      - name: Bump version numbers and commit external files
         if: matrix.os == 'ubuntu-22.04'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git pull origin main
 
           OLD_VER=$(jq -r '.version' src-tauri/tauri.conf.json)
           IFS='.' read -r MAJOR MINOR PATCH <<< "$OLD_VER"
@@ -70,9 +68,12 @@ jobs:
           jq --arg ver "$NEW_VER" '.version = $ver' src-tauri/tauri.conf.json > src-tauri/tauri.conf.json.tmp && mv src-tauri/tauri.conf.json.tmp src-tauri/tauri.conf.json
           sed -i "s/^version = \"$OLD_VER\"/version = \"$NEW_VER\"/" src-tauri/Cargo.toml
 
-          git add src-tauri/tauri.conf.json src-tauri/Cargo.toml
-          git commit -m "chore(release): bump version to $NEW_VER [skip ci]"
-          git push origin main
+          git add .
+
+          if ! git diff-index --quiet HEAD; then
+            git commit -m "chore(release): update files from upstream & bump version to $NEW_VER [skip ci]"
+            git push origin main
+          fi
 
       - name: Pull updated version changes
         if: matrix.os != 'ubuntu-22.04'
