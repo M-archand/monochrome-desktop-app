@@ -77,7 +77,10 @@ jobs:
 
       - name: Pull updated version changes
         if: matrix.os != 'ubuntu-22.04'
-        run: git pull origin main
+        shell: bash
+        run: |
+          git reset --hard
+          git pull origin main
 
       - uses: oven-sh/setup-bun@v2
         with:
