@@ -48,6 +48,7 @@ jobs:
           cp -f temp-external-repo/vite-plugin-auth-gate.js ./vite-plugin-auth-gate.js 2>/dev/null || true
           cp -f temp-external-repo/index.html ./index.html 2>/dev/null || true
           cp -f temp-external-repo/style.css ./style.css 2>/dev/null || true
+          cp -f temp-external-repo/styles.css ./styles.css 2>/dev/null || true
 
           rm -rf temp-external-repo
 
