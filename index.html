@@ -182,7 +182,7 @@
                 <li data-action="track-info" data-type-filter="track,video">Track info</li>
                 <li data-action="open-original-url" data-type-filter="track,video">Open original URL</li>
                 <li data-action="download">Download</li>
-                <li class="separator" data-type-filter="track,album,artist" data-action="horizantal-rule">
+                <li class="separator" data-type-filter="track,album,artist,user-playlist" data-action="horizantal-rule">
                     <!-- IDK why adding a `data-action` is necessary, but without it
                       the `data-type-filter` gets ignored; So I've added it -->
                 </li>
@@ -209,6 +209,9 @@
                     data-label-unblock="Unblock artist"
                 >
                     Block artist
+                </li>
+                <li data-action="delete-user-playlist" data-type-filter="user-playlist" class="danger">
+                    Delete Playlist
                 </li>
             </ul>
         </div>
@@ -331,6 +334,7 @@
                             <div class="fullscreen-track-info">
                                 <div class="fullscreen-track-text">
                                     <h2 id="fullscreen-track-title"></h2>
+                                    <h3 id="fullscreen-track-album"></h3>
                                     <h3 id="fullscreen-track-artist"></h3>
                                 </div>
                                 <div class="fullscreen-actions">
@@ -366,6 +370,7 @@
                                     <span id="fs-current-time">0:00</span>
                                     <div id="fs-progress-bar" class="progress-bar">
                                         <div id="fs-progress-fill" class="progress-fill"></div>
+                                        <div id="fs-seek-tooltip" class="seek-tooltip"></div>
                                     </div>
                                     <span id="fs-total-duration">0:00</span>
                                 </div>
@@ -6923,6 +6928,7 @@
                         <span id="current-time">0:00</span>
                         <div id="progress-bar" class="progress-bar">
                             <div id="progress-fill" class="progress-fill"></div>
+                            <div id="seek-tooltip" class="seek-tooltip"></div>
                         </div>
                         <span id="total-duration">0:00</span>
                     </div>

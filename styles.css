@@ -3799,6 +3799,21 @@ input:checked + .slider::before {
     border-radius: var(--radius-xs);
 }
 
+.seek-tooltip {
+    position: absolute;
+    bottom: 100%;
+    transform: translateX(-50%);
+    margin-bottom: 8px;
+    padding: 2px 6px;
+    background: var(--secondary);
+    color: var(--foreground);
+    font-size: 0.8rem;
+    border-radius: 4px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.1s ease;
+}
+
 .progress-bar:hover {
     height: 8px;
 }
@@ -4046,6 +4061,10 @@ input:checked + .slider::before {
 
     /* Slide interaction */
     color: var(--foreground);
+}
+
+#context-menu li.danger:hover {
+    background-color: var(--color-danger-hover);
 }
 
 #context-menu li.separator,
@@ -4558,7 +4577,8 @@ input:checked + .slider::before {
     overflow-wrap: break-word;
 }
 
-#fullscreen-track-artist {
+#fullscreen-track-artist,
+#fullscreen-track-album {
     font-size: 1.25rem;
     color: color-mix(in srgb, var(--foreground), transparent 40%);
     font-weight: 500;
@@ -4567,7 +4587,8 @@ input:checked + .slider::before {
         text-decoration 0.2s;
 }
 
-#fullscreen-track-artist:hover {
+#fullscreen-track-artist:hover,
+#fullscreen-track-album:hover {
     color: var(--primary);
     text-decoration: underline;
     cursor: pointer;
@@ -10824,6 +10845,12 @@ body:has(#side-panel.active) #close-fullscreen-cover-btn {
 }
 
 #fullscreen-cover-overlay #fullscreen-track-artist {
+    margin: 0.12rem 0 0;
+    font-size: 0.84rem;
+    color: rgb(255 255 255 / 0.74);
+}
+
+#fullscreen-cover-overlay #fullscreen-track-album {
     margin: 0.12rem 0 0;
     font-size: 0.94rem;
     color: rgb(255 255 255 / 0.74);

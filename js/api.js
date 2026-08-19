@@ -545,8 +545,8 @@ export class LosslessAPI {
                 if (manifest.urls && Array.isArray(manifest.urls)) {
                     const priorityKeywords = ['flac', 'lossless', 'hi-res', 'high'];
                     const sortedUrls = [...manifest.urls].sort((a, b) => {
-                        const aLow = a.toLowerCase();
-                        const bLow = b.toLowerCase();
+                        const aLow = String(a ?? '').toLowerCase();
+                        const bLow = String(b ?? '').toLowerCase();
                         const aScore = priorityKeywords.findIndex((k) => aLow.includes(k));
                         const bScore = priorityKeywords.findIndex((k) => bLow.includes(k));
 
@@ -574,8 +574,8 @@ export class LosslessAPI {
                 if (parsed?.urls && Array.isArray(parsed.urls)) {
                     const priorityKeywords = ['flac', 'lossless', 'hi-res', 'high'];
                     const sortedUrls = [...parsed.urls].sort((a, b) => {
-                        const aLow = a.toLowerCase();
-                        const bLow = b.toLowerCase();
+                        const aLow = String(a ?? '').toLowerCase();
+                        const bLow = String(b ?? '').toLowerCase();
                         const aScore = priorityKeywords.findIndex((k) => aLow.includes(k));
                         const bScore = priorityKeywords.findIndex((k) => bLow.includes(k));
                         const finalAScore = aScore === -1 ? 999 : aScore;
@@ -2051,33 +2051,46 @@ export class LosslessAPI {
         return await new Promise((resolve, reject) => {
             let widgetId = null;
             let timeoutId = null;
+            let settled = false;
             const finish = (error, token = null) => {
+                if (settled) return;
+                settled = true;
                 clearTimeout(timeoutId);
+                // Remove the widget, but keep the container attached to the DOM.
+                // Cloudflare's SDK schedules an internal reset asynchronously when a
+                // widget settles, and it throws "Nothing to reset found for provided
+                // container" if the container was already detached. Hiding the panel
+                // instead of removing it keeps the container reachable so that
+                // cleanup can complete without erroring.
                 if (widgetId != null && turnstile.remove) {
                     try {
                         turnstile.remove(widgetId);
                     } catch {}
                 }
-                panel?.remove();
+                if (panel) panel.style.display = 'none';
                 if (error) reject(error);
                 else resolve(token);
             };
             timeoutId = setTimeout(() => finish(new Error('Turnstile timed out')), 30000);
 
-            widgetId = turnstile.render(container, {
-                sitekey: UNIFIED_TURNSTILE_SITE_KEY,
-                action: 'auth',
-                execution: 'execute',
-                appearance: 'interaction-only',
-                theme: 'auto',
-                'before-interactive-callback': () => {
-                    if (panel) panel.style.display = 'block';
-                },
-                callback: (token) => finish(null, token),
-                'error-callback': () => finish(new Error('Turnstile failed')),
-                'expired-callback': () => finish(new Error('Turnstile expired')),
-            });
-            turnstile.execute(widgetId);
+            try {
+                widgetId = turnstile.render(container, {
+                    sitekey: UNIFIED_TURNSTILE_SITE_KEY,
+                    action: 'auth',
+                    execution: 'execute',
+                    appearance: 'interaction-only',
+                    theme: 'auto',
+                    'before-interactive-callback': () => {
+                        if (panel) panel.style.display = 'block';
+                    },
+                    callback: (token) => finish(null, token),
+                    'error-callback': () => finish(new Error('Turnstile failed')),
+                    'expired-callback': () => finish(new Error('Turnstile expired')),
+                });
+                turnstile.execute(widgetId);
+            } catch (error) {
+                finish(error);
+            }
         });
     }
 

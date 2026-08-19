@@ -31,6 +31,7 @@ import { partyManager } from './listening-party.js';
 import { MusicAPI } from './music-api.js';
 import { LyricsManager } from './lyrics.js';
 import { Player } from './player.js';
+import { UIRenderer } from './ui.js';
 
 let currentTrackIdForWaveform = null;
 let copiedTracks = [];
@@ -236,7 +237,7 @@ document.addEventListener('keydown', async (e) => {
     const el = document.activeElement;
     if (['INPUT', 'TEXTAREA'].includes(el?.tagName) || el?.isContentEditable) return;
 
-    const key = e.key.toLowerCase();
+    const key = (e.key || '').toLowerCase();
     if (!(e.ctrlKey || e.metaKey)) return;
 
     if (key === 'a') {
@@ -1022,6 +1023,26 @@ function initializeSmoothSliders(player) {
         updateSeekUI(position);
     });
 
+    // Hover tooltip showing seek target time
+    const seekTooltip = document.getElementById('seek-tooltip');
+
+    progressBar.addEventListener('mousemove', (e) => {
+        if (isSeeking) return; // drag already shows seek time, no need for tooltip
+
+        const activeEl = player.activeElement;
+        const duration = activeEl.duration;
+
+        seek(progressBar, e, (position) => {
+            seekTooltip.textContent = formatTime(position * duration);
+            seekTooltip.style.left = `${e.clientX - progressBar.getBoundingClientRect().left}px`;
+            seekTooltip.style.opacity = `1`;
+        });
+    });
+
+    progressBar.addEventListener('mouseleave', () => {
+        seekTooltip.style.opacity = `0`;
+    });
+
     document.addEventListener('mousemove', (e) => {
         if (isSeeking) {
             seek(progressBar, e, (position) => {
@@ -1232,7 +1253,9 @@ export async function showAddToPlaylistModal(track) {
     const modal = document.getElementById('playlist-select-modal');
     const list = document.getElementById('playlist-select-list');
     const cancelBtn = document.getElementById('playlist-select-cancel');
+    if (!modal || !list || !cancelBtn) return;
     const overlay = modal.querySelector('.modal-overlay');
+    if (!overlay) return;
 
     const renderModal = async () => {
         const playlists = await db.getPlaylists(true);
@@ -1730,7 +1753,9 @@ export async function handleTrackAction(
         const modal = document.getElementById('playlist-select-modal');
         const list = document.getElementById('playlist-select-list');
         const cancelBtn = document.getElementById('playlist-select-cancel');
+        if (!modal || !list || !cancelBtn) return;
         const overlay = modal.querySelector('.modal-overlay');
+        if (!overlay) return;
 
         const renderModal = async () => {
             const playlists = await db.getPlaylists(true);
@@ -2105,6 +2130,19 @@ export async function handleTrackAction(
         } else {
             contentBlockingSettings.blockArtist(artistObj);
             showNotification(`Blocked artist: ${artistName || 'Unknown Artist'}`);
+        }
+    } else if (action === 'delete-user-playlist') {
+        const contextMenu = document.getElementById('context-menu');
+        const playlistId = item.id || item.uuid;
+        if (confirm('Are you sure you want to delete this playlist?')) {
+            await db.deletePlaylist(playlistId);
+            await syncManager.syncUserPlaylist({ id: playlistId }, 'delete');
+            try {
+                await UIRenderer.instance.renderLibraryPage();
+            } catch (error) {
+                console.error('Failed to refresh library after playlist deletion:', error);
+                showNotification('Playlist deleted, but the library could not be refreshed.');
+            }
         }
     }
 }
@@ -2745,21 +2783,21 @@ export function initializeTrackInteractions(player, api, mainContent, contextMen
     });
 
     // Now playing bar interactions
-    document.querySelector('.now-playing-bar .title').addEventListener('click', () => {
+    document.querySelector('.now-playing-bar .title')?.addEventListener('click', () => {
         const track = player.currentTrack;
         if (track?.album?.id) {
             navigate(`/album/${track.album.id}`);
         }
     });
 
-    document.querySelector('.now-playing-bar .album').addEventListener('click', () => {
+    document.querySelector('.now-playing-bar .album')?.addEventListener('click', () => {
         const track = player.currentTrack;
         if (track?.album?.id) {
             navigate(`/album/${track.album.id}`);
         }
     });
 
-    document.querySelector('.now-playing-bar .artist').addEventListener('click', (e) => {
+    document.querySelector('.now-playing-bar .artist')?.addEventListener('click', (e) => {
         const link = e.target.closest('.artist-link');
         if (link) {
             e.stopPropagation();

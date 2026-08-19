@@ -108,6 +108,11 @@ import {
 const AOTY_BASE = 'https://aoty.prigoana.pw';
 const AOTY_CACHE_TTL = 86_400_000; // 24 hours
 
+function aotyCoverUrl(url) {
+    if (!url) return url;
+    return String(url).replace(/(https?:\/\/cdn2\.albumoftheyear\.org\/)\d+x0\//, '$15000x0/');
+}
+
 async function fetchAOTY(path) {
     const key = `aoty_cache_${path}`;
     try {
@@ -1057,7 +1062,7 @@ export class UIRenderer {
 
         // Create new listener
         const listener = () => {
-            const query = searchInput.value.toLowerCase().trim();
+            const query = (searchInput.value || '').toLowerCase().trim();
             const trackItems = tracklistContainer.querySelectorAll('.track-item');
 
             trackItems.forEach((item) => {
@@ -1092,7 +1097,7 @@ export class UIRenderer {
         }
 
         const listener = () => {
-            const query = searchInput.value.toLowerCase().trim();
+            const query = (searchInput.value || '').toLowerCase().trim();
             const selector = container.classList.contains('card-grid') ? '.card[data-track-id]' : '.track-item';
             container.querySelectorAll(selector).forEach((item) => {
                 const track = trackDataStore.get(item);
@@ -1300,12 +1305,13 @@ export class UIRenderer {
         const image = document.getElementById('fullscreen-cover-image');
         const videoContainer = document.getElementById('fullscreen-video-container');
         const title = document.getElementById('fullscreen-track-title');
+        const album = document.getElementById('fullscreen-track-album');
         const artist = document.getElementById('fullscreen-track-artist');
         const nextTrackEl = document.getElementById('fullscreen-next-track');
 
         const isRealVideo = track.type === 'video';
         const visualizerContainer = document.getElementById('visualizer-container');
-        overlay.classList.toggle('is-video-mode', isRealVideo);
+        if (overlay) overlay.classList.toggle('is-video-mode', isRealVideo);
 
         const toggleUiBtn = document.getElementById('toggle-ui-btn');
         if (toggleUiBtn) {
@@ -1410,13 +1416,17 @@ export class UIRenderer {
         }
 
         this.updateFullscreenQualityBadgePlacement(track, overlay);
-        artist.textContent = getTrackArtists(track);
+        if (artist) artist.textContent = getTrackArtists(track);
+        if (album) album.textContent = track.album?.title;
 
-        if (nextTrack) {
-            nextTrackEl.style.display = 'flex';
-            nextTrackEl.querySelector('.value').textContent = `${nextTrack.title} • ${getTrackArtists(nextTrack)}`;
-        } else {
-            nextTrackEl.style.display = 'none';
+        if (nextTrackEl) {
+            if (nextTrack) {
+                nextTrackEl.style.display = 'flex';
+                const valueEl = nextTrackEl.querySelector('.value');
+                if (valueEl) valueEl.textContent = `${nextTrack.title} • ${getTrackArtists(nextTrack)}`;
+            } else {
+                nextTrackEl.style.display = 'none';
+            }
         }
     }
 
@@ -2086,6 +2096,7 @@ export class UIRenderer {
         const repeatBtn = document.getElementById('fs-repeat-btn');
         const visualizerBtn = document.getElementById('fs-visualizer-btn');
         const progressBar = document.getElementById('fs-progress-bar');
+        const seekTooltip = document.getElementById('fs-seek-tooltip');
         const progressFill = document.getElementById('fs-progress-fill');
         const currentTimeEl = document.getElementById('fs-current-time');
         const totalDurationEl = document.getElementById('fs-total-duration');
@@ -2095,6 +2106,7 @@ export class UIRenderer {
         const fsCastBtn = document.getElementById('fs-cast-btn');
         const fsQueueBtn = document.getElementById('fs-queue-btn');
         const artistEl = document.getElementById('fullscreen-track-artist');
+        const albumEl = document.getElementById('fullscreen-track-album');
 
         if (artistEl) {
             artistEl.style.cursor = 'pointer';
@@ -2102,6 +2114,16 @@ export class UIRenderer {
                 if (this.player.currentTrack && this.player.currentTrack.artist) {
                     this.closeFullscreenCover();
                     navigate(`/artist/${this.player.currentTrack.artist.id}`);
+                }
+            };
+        }
+
+        if (albumEl) {
+            albumEl.style.cursor = 'pointer';
+            albumEl.onclick = () => {
+                if (this.player.currentTrack && this.player.currentTrack.album) {
+                    this.closeFullscreenCover();
+                    navigate(`/album/${this.player.currentTrack.album.id}`);
                 }
             };
         }
@@ -2205,6 +2227,24 @@ export class UIRenderer {
             },
             { passive: false }
         );
+
+        progressBar.addEventListener('mousemove', (e) => {
+            if (isFsSeeking) return; // drag already shows seek time, no need for tooltip
+
+            const activeEl = this.player.activeElement;
+            const duration = activeEl.duration;
+
+            const rect = progressBar.getBoundingClientRect();
+            const pos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+
+            seekTooltip.textContent = formatTime(pos * duration);
+            seekTooltip.style.left = `${e.clientX - rect.left}px`;
+            seekTooltip.style.opacity = `1`;
+        });
+
+        progressBar.addEventListener('mouseleave', () => {
+            seekTooltip.style.opacity = `0`;
+        });
 
         document.addEventListener('mousemove', (e) => {
             if (isFsSeeking) {
@@ -3299,7 +3339,7 @@ export class UIRenderer {
                 const img = document.createElement('img');
                 img.crossOrigin = 'anonymous';
                 img.referrerPolicy = 'no-referrer';
-                img.src = item.image || 'assets/logo.svg';
+                img.src = aotyCoverUrl(item.image) || 'assets/logo.svg';
                 img.width = 88;
                 img.height = 56;
                 img.style.cssText =
@@ -3464,7 +3504,7 @@ export class UIRenderer {
 
                 row.innerHTML = `
                     <span style="font-size:0.8rem;font-weight:700;color:var(--primary);min-width:2rem;text-align:right;flex-shrink:0;">#${escapeHtml(item.rank || '')}</span>
-                    <img crossorigin="anonymous" referrerpolicy="no-referrer" src="${item.cover || 'assets/logo.svg'}" width="48" height="48"
+                    <img crossorigin="anonymous" referrerpolicy="no-referrer" src="${aotyCoverUrl(item.cover) || 'assets/logo.svg'}" width="48" height="48"
                         style="border-radius:6px;object-fit:cover;flex-shrink:0;background:var(--secondary);"
                         loading="lazy" onerror="this.src='assets/logo.svg';this.onerror=null;">
                     <div style="flex:1;min-width:0;">
@@ -3594,7 +3634,7 @@ export class UIRenderer {
     createAOTYAlbumCardHTML(album, isUpcoming = false) {
         const title = escapeHtml(album.title || 'Unknown Album');
         const artist = escapeHtml(album.artist || '');
-        const cover = `<img crossorigin="anonymous" referrerpolicy="no-referrer" src="${album.cover || 'assets/logo.svg'}" alt="${title}" class="card-image" loading="lazy" onerror="this.src='assets/logo.svg'">`;
+        const cover = `<img crossorigin="anonymous" referrerpolicy="no-referrer" src="${aotyCoverUrl(album.cover) || 'assets/logo.svg'}" alt="${title}" class="card-image" loading="lazy" onerror="this.src='assets/logo.svg'">`;
 
         const scoreParts = [];
         if (album.criticScore) scoreParts.push(`${album.criticScore} critic`);
@@ -4318,13 +4358,22 @@ export class UIRenderer {
                 });
             } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
                 // safari supports HLS natively
-                video.src = url;
+                try {
+                    video.src = url;
+                } catch {
+                    video.replaceWith(fallbackImg);
+                }
             } else {
                 video.replaceWith(fallbackImg);
             }
         } else {
             // MP4
-            video.src = url;
+            try {
+                video.src = url;
+            } catch {
+                video.replaceWith(fallbackImg);
+                return;
+            }
             video.play().catch((e) => {
                 console.warn('MP4 autoplay failed:', e);
                 video.muted = true;
@@ -4657,19 +4706,37 @@ export class UIRenderer {
     }
 
     removeFromSearchHistory(query) {
-        let history = JSON.parse(localStorage.getItem('search-history') || '[]');
+        let history = [];
+        try {
+            history = JSON.parse(localStorage.getItem('search-history') || '[]');
+        } catch {
+            history = [];
+        }
         history = history.filter((q) => q !== query);
-        localStorage.setItem('search-history', JSON.stringify(history));
+        try {
+            localStorage.setItem('search-history', JSON.stringify(history));
+        } catch {
+            /* ignore quota/parse failures */
+        }
         this.renderSearchHistory();
     }
 
     addToSearchHistory(query) {
         if (!query || query.trim().length === 0) return;
-        let history = JSON.parse(localStorage.getItem('search-history') || '[]');
+        let history = [];
+        try {
+            history = JSON.parse(localStorage.getItem('search-history') || '[]');
+        } catch {
+            history = [];
+        }
         history = history.filter((q) => q !== query);
         history.unshift(query);
         history = history.slice(0, 10);
-        localStorage.setItem('search-history', JSON.stringify(history));
+        try {
+            localStorage.setItem('search-history', JSON.stringify(history));
+        } catch {
+            /* ignore quota failures */
+        }
     }
 
     async renderAlbumPage(albumId, provider = null) {
@@ -4688,6 +4755,11 @@ export class UIRenderer {
         if (dlBtn) dlBtn.innerHTML = `${SVG_DOWNLOAD(20)}<span>Download Album</span>`;
         const mixBtn = document.getElementById('album-mix-btn');
         if (mixBtn) mixBtn.style.display = 'none';
+
+        if (!imageEl || !tracklistContainer) {
+            console.warn('Album page elements missing; skipping render.');
+            return;
+        }
 
         imageEl.src = '';
         imageEl.style.backgroundColor = 'var(--muted)';
@@ -6096,7 +6168,7 @@ export class UIRenderer {
 
             // "In your library" section: find liked tracks and playlist tracks for this artist
             if (inLibraryContainer && inLibrarySection) {
-                const artistNameLower = artist.name.toLowerCase();
+                const artistNameLower = (artist.name || '').toLowerCase();
 
                 const isTrackByArtist = (track) => {
                     if (track.artists && Array.isArray(track.artists)) {
@@ -7050,6 +7122,11 @@ export class UIRenderer {
 
         const playBtn = document.getElementById('play-track-btn');
         const likeBtn = document.getElementById('like-track-btn');
+
+        if (!imageEl || !titleEl || !artistEl || !albumEl || !yearEl || !albumTracksContainer) {
+            console.warn('Track page elements missing; aborting renderTrackPage');
+            return;
+        }
 
         imageEl.src = '';
         imageEl.style.backgroundColor = 'var(--muted)';
