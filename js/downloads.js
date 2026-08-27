@@ -13,7 +13,14 @@ import {
 } from './utils.js';
 import { lyricsSettings, playlistSettings } from './storage.js';
 import { generateM3U, generateM3U8, generateCUE, generateNFO, generateJSON } from './playlist-generator.js';
-import { ZipStreamWriter, ZipBlobWriter, FolderPickerWriter, SequentialFileWriter, TauriFolderWriter } from './bulk-download-writer.ts';
+import {
+    ZipStreamWriter,
+    ZipBlobWriter,
+    FolderPickerWriter,
+    SequentialFileWriter,
+    TauriFolderWriter,
+    TauriZipFileWriter,
+} from './bulk-download-writer.ts';
 import { isTauri } from '@tauri-apps/api/core';
 import { open as openNativeDialog } from '@tauri-apps/plugin-dialog';
 import { FfmpegProgress } from './ffmpeg.types.js';
@@ -523,6 +530,13 @@ async function bulkDownload({
  * only succeeds when the folder is already known.
  */
 async function createSingleTrackFolderWriter() {
+    // Desktop app: single-track downloads always go to the Default Download
+    // Location when one is set.
+    if (isTauri()) {
+        const defaultPath = await db.getSetting('default_download_folder_path');
+        return defaultPath ? new TauriFolderWriter(defaultPath) : null;
+    }
+
     if (!modernSettings.downloadSinglesToFolder) return null;
 
     const method = modernSettings.bulkDownloadMethod;
@@ -539,15 +553,6 @@ async function createSingleTrackFolderWriter() {
             }
         }
         return null;
-    }
-
-    // Use the Tauri fs plugin with a stored path, works on all platforms.
-    // The WebView lacks file system access api on Linux/macOS.
-    if (method === BulkDownloadMethod.Folder && isTauri()) {
-        const rememberFolder = modernSettings.rememberBulkDownloadFolder;
-        const defaultPath = await db.getSetting('default_download_folder_path');
-        const basePath = defaultPath ?? (rememberFolder ? await db.getSetting('bulk_download_folder_path') : null);
-        return basePath ? new TauriFolderWriter(basePath) : null;
     }
 
     if (method === BulkDownloadMethod.Folder && hasFolderPicker) {
@@ -623,11 +628,12 @@ async function createBulkWriter(folderName) {
         // Browser without File System Access API - fall through to ZIP
     }
 
-    // ── Folder Picker method (desktop app) ──────────────────────────────────
-    if (method === BulkDownloadMethod.Folder && isTauri()) {
-        const rememberFolder = modernSettings.rememberBulkDownloadFolder;
-        const defaultPath = await db.getSetting('default_download_folder_path');
-        let basePath = defaultPath ?? (rememberFolder ? await db.getSetting('bulk_download_folder_path') : null);
+    // ── Desktop app: write through the Tauri fs plugin ───────────────────────
+    // Works on all platforms (the WebView lacks the File System Access API on
+    // Linux/macOS). Downloads go to the Default Download Location when set,
+    // otherwise the native folder dialog asks where to save.
+    if (isTauri() && method !== BulkDownloadMethod.LocalMedia) {
+        let basePath = await db.getSetting('default_download_folder_path');
 
         if (!basePath) {
             basePath = await openNativeDialog({
@@ -640,13 +646,9 @@ async function createBulkWriter(folderName) {
             }
         }
 
-        if (rememberFolder) {
-            await db.saveSetting('bulk_download_folder_path', basePath);
-        } else {
-            await db.saveSetting('bulk_download_folder_path', null);
-        }
-
-        return new TauriFolderWriter(basePath);
+        return method === BulkDownloadMethod.Zip
+            ? new TauriZipFileWriter(basePath, `${folderName}.zip`)
+            : new TauriFolderWriter(basePath);
     }
 
     // ── Folder Picker method (browser) ──────────────────────────────────────

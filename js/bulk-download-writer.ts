@@ -194,6 +194,25 @@ export class FolderPickerWriter implements IBulkDownloadWriter {
 }
 
 /**
+ * Collects a ZIP archive into memory and writes it into a folder on disk
+ * through the Tauri fs plugin. Used in the desktop app, where the WebView may
+ * lack both the File System Access API and working anchor downloads.
+ */
+export class TauriZipFileWriter implements IBulkDownloadWriter {
+    constructor(
+        private readonly basePath: string,
+        private readonly filename: string
+    ) {}
+
+    async write(files: AsyncIterable<WriterEntry>): Promise<void> {
+        const { downloadZip } = await loadClientZip();
+        const response = downloadZip(files);
+        const blob = await response.blob();
+        await writeFile(`${this.basePath}/${this.filename}`, new Uint8Array(await blob.arrayBuffer()));
+    }
+}
+
+/**
  * Writes files into a folder on disk through the Tauri fs plugin. Used in the
  * desktop app, where the WebView may lack the File System Access API
  * (WebKitGTK on Linux, WKWebView on macOS). The base path comes from the
