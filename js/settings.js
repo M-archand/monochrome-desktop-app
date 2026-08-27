@@ -59,6 +59,8 @@ import { authManager } from './accounts/auth.js';
 import { syncManager } from './accounts/pocketbase.js';
 import { containerFormats, customFormats } from './ffmpegFormats.ts';
 import { BulkDownloadMethod, modernSettings } from './ModernSettings.js';
+import { isTauri } from '@tauri-apps/api/core';
+import { open as openNativeDialog } from '@tauri-apps/plugin-dialog';
 import { canBrowserStreamAtmosQuality } from './platform-detection.js';
 
 async function getButterchurnPresets(...args) {
@@ -1140,7 +1142,8 @@ export async function initializeSettings(scrobbler, player, api, ui) {
         typeof FileSystemFileHandle !== 'undefined' &&
         'createWritable' in FileSystemFileHandle.prototype;
     const hasFolderPicker = 'showDirectoryPicker' in window;
-
+    const isTauriApp = isTauri();
+    const supportsFolderPicker = hasFolderPicker || isTauriApp;
     const rememberFolderSetting = document.getElementById('remember-folder-setting');
     const rememberFolderToggle = document.getElementById('remember-folder-toggle');
     const resetSavedFolderSetting = document.getElementById('reset-saved-folder-setting');
@@ -1155,15 +1158,21 @@ export async function initializeSettings(scrobbler, player, api, ui) {
     /** Updates the Default Download Location display with the saved folder name */
     async function refreshDefaultLocationDisplay() {
         if (!defaultLocationName) return;
-        let handle = null;
+        let label = null;
         try {
-            handle = await db.getSetting('default_download_folder_handle');
+            if (isTauriApp) {
+                label = await db.getSetting('default_download_folder_path');
+            } else {
+                const handle = await db.getSetting('default_download_folder_handle');
+                label = handle?.name || null;
+            }
         } catch {
-            handle = null;
+            label = null;
         }
-        defaultLocationName.textContent = handle?.name || 'Not set';
+        defaultLocationName.textContent = label || 'Not set';
+        defaultLocationName.title = label || '';
         if (defaultLocationClearBtn) {
-            defaultLocationClearBtn.style.display = handle ? '' : 'none';
+            defaultLocationClearBtn.style.display = label ? '' : 'none';
         }
     }
 
@@ -1183,20 +1192,21 @@ export async function initializeSettings(scrobbler, player, api, ui) {
         const isFolderOrLocal = isFolderMethod || method === BulkDownloadMethod.LocalMedia;
 
         if (defaultLocationSetting) {
-            defaultLocationSetting.style.display = isFolderMethod && hasFolderPicker ? '' : 'none';
+            defaultLocationSetting.style.display = isFolderMethod && supportsFolderPicker ? '' : 'none';
         }
         await refreshDefaultLocationDisplay();
 
         if (rememberFolderSetting) {
-            rememberFolderSetting.style.display = isFolderMethod && hasFolderPicker ? '' : 'none';
+            rememberFolderSetting.style.display = isFolderMethod && supportsFolderPicker ? '' : 'none';
         }
 
         // Reset button: only visible when folder method + remember enabled + valid saved handle exists
         if (resetSavedFolderSetting) {
             let showReset = false;
-            if (isFolderMethod && hasFolderPicker && modernSettings.rememberBulkDownloadFolder) {
+            if (isFolderMethod && supportsFolderPicker && modernSettings.rememberBulkDownloadFolder) {
                 const savedHandle = await db.getSetting('bulk_download_folder_handle');
-                showReset = !!savedHandle;
+                const savedPath = await db.getSetting('bulk_download_folder_path');
+                showReset = !!(savedHandle || savedPath);
             }
             resetSavedFolderSetting.style.display = showReset ? '' : 'none';
         }
@@ -1208,19 +1218,26 @@ export async function initializeSettings(scrobbler, player, api, ui) {
 
     const bulkDownloadMethod = document.getElementById('bulk-download-method');
     if (bulkDownloadMethod) {
-        // Remove the folder picker option if the browser doesn't support it
-        if (!hasFolderPicker) {
+        // Remove the folder picker option if not supported by browser api or native
+        if (!supportsFolderPicker) {
             const folderOption = bulkDownloadMethod.querySelector('option[value="folder"]');
             if (folderOption) {
                 folderOption.remove();
             }
+        }
+        if (!hasFolderPicker) {
             const localOption = bulkDownloadMethod.querySelector('option[value="local"]');
             if (localOption) {
                 localOption.remove();
             }
-            // If the stored method is 'folder' or 'local' without native support, fall back to 'zip'
+        }
+        // If the stored method has no support, fall back to 'zip'
+        {
             const currentMethod = modernSettings.bulkDownloadMethod;
-            if (currentMethod === BulkDownloadMethod.Folder || currentMethod === BulkDownloadMethod.LocalMedia) {
+            if (
+                (currentMethod === BulkDownloadMethod.Folder && !supportsFolderPicker) ||
+                (currentMethod === BulkDownloadMethod.LocalMedia && !hasFolderPicker)
+            ) {
                 modernSettings.bulkDownloadMethod = BulkDownloadMethod.Zip;
             }
         }
@@ -1281,18 +1298,31 @@ export async function initializeSettings(scrobbler, player, api, ui) {
     if (resetSavedFolderBtn) {
         resetSavedFolderBtn.addEventListener('click', async () => {
             await db.saveSetting('bulk_download_folder_handle', null);
+            await db.saveSetting('bulk_download_folder_path', null);
             await updateFolderMethodVisibility();
         });
     }
 
     if (defaultLocationBtn) {
         defaultLocationBtn.addEventListener('click', async () => {
-            if (!hasFolderPicker) return;
+            if (!supportsFolderPicker) return;
             try {
-                const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
-                if (handle) {
-                    await db.saveSetting('default_download_folder_handle', handle);
-                    await refreshDefaultLocationDisplay();
+                if (isTauriApp) {
+                    const path = await openNativeDialog({
+                        directory: true,
+                        multiple: false,
+                        title: 'Choose default download folder',
+                    });
+                    if (path) {
+                        await db.saveSetting('default_download_folder_path', path);
+                        await refreshDefaultLocationDisplay();
+                    }
+                } else {
+                    const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                    if (handle) {
+                        await db.saveSetting('default_download_folder_handle', handle);
+                        await refreshDefaultLocationDisplay();
+                    }
                 }
             } catch {
                 // User cancelled the picker
@@ -1303,6 +1333,7 @@ export async function initializeSettings(scrobbler, player, api, ui) {
     if (defaultLocationClearBtn) {
         defaultLocationClearBtn.addEventListener('click', async () => {
             await db.saveSetting('default_download_folder_handle', null);
+            await db.saveSetting('default_download_folder_path', null);
             await refreshDefaultLocationDisplay();
         });
     }

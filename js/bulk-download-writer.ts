@@ -1,4 +1,5 @@
 import { triggerDownload } from './download-utils';
+import { mkdir, writeFile } from '@tauri-apps/plugin-fs';
 
 /**
  * A single entry to be included in a ZIP archive or written directly to a folder.
@@ -188,6 +189,50 @@ export class FolderPickerWriter implements IBulkDownloadWriter {
                 await writable.abort();
                 throw error;
             }
+        }
+    }
+}
+
+/**
+ * Writes files into a folder on disk through the Tauri fs plugin. Used in the
+ * desktop app, where the WebView may lack the File System Access API
+ * (WebKitGTK on Linux, WKWebView on macOS). The base path comes from the
+ * native folder dialog (tauri-plugin-dialog). Subdirectories embedded in
+ * file entry names are created automatically.
+ */
+export class TauriFolderWriter implements IBulkDownloadWriter {
+    constructor(private readonly basePath: string) {}
+
+    getBasePath(): string {
+        return this.basePath;
+    }
+
+    async write(files: AsyncIterable<WriterEntry>): Promise<void> {
+        const createdDirs = new Set<string>();
+
+        for await (const file of files) {
+            const parts = file.name.split('/').filter((p) => p && p !== '.' && p !== '..');
+            if (parts.length === 0) continue;
+
+            const dirPath = [this.basePath, ...parts.slice(0, -1)].join('/');
+            if (!createdDirs.has(dirPath)) {
+                await mkdir(dirPath, { recursive: true });
+                createdDirs.add(dirPath);
+            }
+
+            const { input } = file;
+            let data: Uint8Array;
+            if (input instanceof Blob) {
+                data = new Uint8Array(await input.arrayBuffer());
+            } else if (typeof input === 'string') {
+                data = new TextEncoder().encode(input);
+            } else if (input instanceof Uint8Array) {
+                data = input;
+            } else {
+                data = new Uint8Array(input);
+            }
+
+            await writeFile([this.basePath, ...parts].join('/'), data);
         }
     }
 }
