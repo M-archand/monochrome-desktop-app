@@ -1147,6 +1147,25 @@ export async function initializeSettings(scrobbler, player, api, ui) {
     const resetSavedFolderBtn = document.getElementById('reset-saved-folder-btn');
     const singleToFolderSetting = document.getElementById('single-to-folder-setting');
     const singleToFolderToggle = document.getElementById('single-to-folder-toggle');
+    const defaultLocationSetting = document.getElementById('default-download-location-setting');
+    const defaultLocationName = document.getElementById('default-download-location-name');
+    const defaultLocationBtn = document.getElementById('default-download-location-btn');
+    const defaultLocationClearBtn = document.getElementById('default-download-location-clear-btn');
+
+    /** Updates the Default Download Location display with the saved folder name */
+    async function refreshDefaultLocationDisplay() {
+        if (!defaultLocationName) return;
+        let handle = null;
+        try {
+            handle = await db.getSetting('default_download_folder_handle');
+        } catch {
+            handle = null;
+        }
+        defaultLocationName.textContent = handle?.name || 'Not set';
+        if (defaultLocationClearBtn) {
+            defaultLocationClearBtn.style.display = handle ? '' : 'none';
+        }
+    }
 
     /** Shows/hides the Force ZIP as Blob setting based on method and browser support */
     function updateForceZipBlobVisibility() {
@@ -1163,6 +1182,11 @@ export async function initializeSettings(scrobbler, player, api, ui) {
         const isFolderMethod = method === BulkDownloadMethod.Folder;
         const isFolderOrLocal = isFolderMethod || method === BulkDownloadMethod.LocalMedia;
 
+        if (defaultLocationSetting) {
+            defaultLocationSetting.style.display = isFolderMethod && hasFolderPicker ? '' : 'none';
+        }
+        await refreshDefaultLocationDisplay();
+
         if (rememberFolderSetting) {
             rememberFolderSetting.style.display = isFolderMethod && hasFolderPicker ? '' : 'none';
         }
@@ -1171,7 +1195,7 @@ export async function initializeSettings(scrobbler, player, api, ui) {
         if (resetSavedFolderSetting) {
             let showReset = false;
             if (isFolderMethod && hasFolderPicker && modernSettings.rememberBulkDownloadFolder) {
-                const savedHandle = modernSettings.bulkDownloadFolder;
+                const savedHandle = await db.getSetting('bulk_download_folder_handle');
                 showReset = !!savedHandle;
             }
             resetSavedFolderSetting.style.display = showReset ? '' : 'none';
@@ -1256,9 +1280,30 @@ export async function initializeSettings(scrobbler, player, api, ui) {
 
     if (resetSavedFolderBtn) {
         resetSavedFolderBtn.addEventListener('click', async () => {
-            modernSettings.bulkDownloadFolder = null;
-            await modernSettings.waitPending();
+            await db.saveSetting('bulk_download_folder_handle', null);
             await updateFolderMethodVisibility();
+        });
+    }
+
+    if (defaultLocationBtn) {
+        defaultLocationBtn.addEventListener('click', async () => {
+            if (!hasFolderPicker) return;
+            try {
+                const handle = await window.showDirectoryPicker({ mode: 'readwrite' });
+                if (handle) {
+                    await db.saveSetting('default_download_folder_handle', handle);
+                    await refreshDefaultLocationDisplay();
+                }
+            } catch {
+                // User cancelled the picker
+            }
+        });
+    }
+
+    if (defaultLocationClearBtn) {
+        defaultLocationClearBtn.addEventListener('click', async () => {
+            await db.saveSetting('default_download_folder_handle', null);
+            await refreshDefaultLocationDisplay();
         });
     }
 

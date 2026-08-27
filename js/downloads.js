@@ -541,7 +541,8 @@ async function createSingleTrackFolderWriter() {
 
     if (method === BulkDownloadMethod.Folder && hasFolderPicker) {
         const rememberFolder = modernSettings.rememberBulkDownloadFolder;
-        const savedHandle = rememberFolder ? await db.getSetting('bulk_download_folder_handle') : null;
+        const defaultHandle = await db.getSetting('default_download_folder_handle');
+        const savedHandle = defaultHandle ?? (rememberFolder ? await db.getSetting('bulk_download_folder_handle') : null);
         // Try to reuse the saved handle silently first.
         if (savedHandle && typeof savedHandle.requestPermission === 'function') {
             try {
@@ -614,7 +615,8 @@ async function createBulkWriter(folderName) {
     // ── Folder Picker method ─────────────────────────────────────────────────
     if (method === BulkDownloadMethod.Folder && hasFolderPicker) {
         const rememberFolder = modernSettings.rememberBulkDownloadFolder;
-        const savedHandle = rememberFolder ? await db.getSetting('bulk_download_folder_handle') : null;
+        const defaultHandle = await db.getSetting('default_download_folder_handle');
+        const savedHandle = defaultHandle ?? (rememberFolder ? await db.getSetting('bulk_download_folder_handle') : null);
         try {
             const writer = await FolderPickerWriter.create(savedHandle);
             if (rememberFolder) {
