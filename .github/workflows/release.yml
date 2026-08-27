@@ -44,15 +44,7 @@ jobs:
   build:
     needs: bump
 
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - windows-latest
-          - macos-latest
-          - ubuntu-22.04
-
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout repository
@@ -63,12 +55,10 @@ jobs:
         run: git pull origin main
 
       - uses: oven-sh/setup-bun@v2
-        with:
-          bun-cache: true
 
       - run: bun install --frozen-lockfile
 
-      - if: runner.os == 'Linux'
+      - name: Install Linux build dependencies
         run: |
           sudo apt update
           sudo apt install -y \
@@ -99,9 +89,4 @@ jobs:
           uploadUpdaterJson: false
           releaseDraft: false
           prerelease: false
-          includeAppImage: true
-          includeDeb: true
-          includeRpm: true
-          includeDmg: true
-          includeMsi: true
-          includeExe: true
+          args: --bundles deb
