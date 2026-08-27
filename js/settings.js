@@ -1144,12 +1144,6 @@ export async function initializeSettings(scrobbler, player, api, ui) {
     const hasFolderPicker = 'showDirectoryPicker' in window;
     const isTauriApp = isTauri();
     const supportsFolderPicker = hasFolderPicker || isTauriApp;
-    const rememberFolderSetting = document.getElementById('remember-folder-setting');
-    const rememberFolderToggle = document.getElementById('remember-folder-toggle');
-    const resetSavedFolderSetting = document.getElementById('reset-saved-folder-setting');
-    const resetSavedFolderBtn = document.getElementById('reset-saved-folder-btn');
-    const singleToFolderSetting = document.getElementById('single-to-folder-setting');
-    const singleToFolderToggle = document.getElementById('single-to-folder-toggle');
     const defaultLocationSetting = document.getElementById('default-download-location-setting');
     const defaultLocationName = document.getElementById('default-download-location-name');
     const defaultLocationBtn = document.getElementById('default-download-location-btn');
@@ -1180,64 +1174,39 @@ export async function initializeSettings(scrobbler, player, api, ui) {
     function updateForceZipBlobVisibility() {
         if (!forceZipBlobSettingItem) return;
         const method = modernSettings.bulkDownloadMethod;
-        // Only relevant when zip method is selected and the browser supports streaming
-        const visible = method === BulkDownloadMethod.Zip && hasFileSystemAccess;
+        // Only relevant when zip method is selected and the browser supports
+        // streaming. The desktop app writes the ZIP via the Tauri fs plugin,
+        // so the blob/stream choice never applies there.
+        const visible = method === BulkDownloadMethod.Zip && hasFileSystemAccess && !isTauriApp;
         forceZipBlobSettingItem.style.display = visible ? '' : 'none';
     }
 
-    /** Shows/hides folder-picker-specific and folder-method settings */
+    /** Shows/hides the Default Download Location setting and refreshes its display */
     async function updateFolderMethodVisibility() {
-        const method = modernSettings.bulkDownloadMethod;
-        const isFolderMethod = method === BulkDownloadMethod.Folder;
-        const isFolderOrLocal = isFolderMethod || method === BulkDownloadMethod.LocalMedia;
-
         if (defaultLocationSetting) {
-            defaultLocationSetting.style.display = isFolderMethod && supportsFolderPicker ? '' : 'none';
+            // Always shown when a folder can be picked at all - the default
+            // location applies to every download method
+            defaultLocationSetting.style.display = supportsFolderPicker ? '' : 'none';
         }
         await refreshDefaultLocationDisplay();
-
-        if (rememberFolderSetting) {
-            rememberFolderSetting.style.display = isFolderMethod && supportsFolderPicker ? '' : 'none';
-        }
-
-        // Reset button: only visible when folder method + remember enabled + valid saved handle exists
-        if (resetSavedFolderSetting) {
-            let showReset = false;
-            if (isFolderMethod && supportsFolderPicker && modernSettings.rememberBulkDownloadFolder) {
-                const savedHandle = await db.getSetting('bulk_download_folder_handle');
-                const savedPath = await db.getSetting('bulk_download_folder_path');
-                showReset = !!(savedHandle || savedPath);
-            }
-            resetSavedFolderSetting.style.display = showReset ? '' : 'none';
-        }
-
-        if (singleToFolderSetting) {
-            singleToFolderSetting.style.display = isFolderOrLocal ? '' : 'none';
-        }
     }
 
     const bulkDownloadMethod = document.getElementById('bulk-download-method');
     if (bulkDownloadMethod) {
-        // Remove the folder picker option if not supported by browser api or native
-        if (!supportsFolderPicker) {
-            const folderOption = bulkDownloadMethod.querySelector('option[value="folder"]');
-            if (folderOption) {
-                folderOption.remove();
-            }
-        }
         if (!hasFolderPicker) {
             const localOption = bulkDownloadMethod.querySelector('option[value="local"]');
             if (localOption) {
                 localOption.remove();
             }
         }
-        // If the stored method has no support, fall back to 'zip'
+        // Migrate stored methods that no longer exist in the dropdown
         {
             const currentMethod = modernSettings.bulkDownloadMethod;
-            if (
-                (currentMethod === BulkDownloadMethod.Folder && !supportsFolderPicker) ||
-                (currentMethod === BulkDownloadMethod.LocalMedia && !hasFolderPicker)
-            ) {
+            if (currentMethod === BulkDownloadMethod.Folder) {
+                // The Folder Picker method was folded into Individual Files +
+                // Default Download Location
+                modernSettings.bulkDownloadMethod = BulkDownloadMethod.Individual;
+            } else if (currentMethod === BulkDownloadMethod.LocalMedia && !hasFolderPicker) {
                 modernSettings.bulkDownloadMethod = BulkDownloadMethod.Zip;
             }
         }
@@ -1286,23 +1255,6 @@ export async function initializeSettings(scrobbler, player, api, ui) {
         });
     }
 
-    if (rememberFolderToggle) {
-        rememberFolderToggle.checked = modernSettings.rememberBulkDownloadFolder;
-        rememberFolderToggle.addEventListener('change', async (e) => {
-            modernSettings.rememberBulkDownloadFolder = !!e.target.checked;
-            await modernSettings.waitPending();
-            await updateFolderMethodVisibility();
-        });
-    }
-
-    if (resetSavedFolderBtn) {
-        resetSavedFolderBtn.addEventListener('click', async () => {
-            await db.saveSetting('bulk_download_folder_handle', null);
-            await db.saveSetting('bulk_download_folder_path', null);
-            await updateFolderMethodVisibility();
-        });
-    }
-
     if (defaultLocationBtn) {
         defaultLocationBtn.addEventListener('click', async () => {
             if (!supportsFolderPicker) return;
@@ -1335,13 +1287,6 @@ export async function initializeSettings(scrobbler, player, api, ui) {
             await db.saveSetting('default_download_folder_handle', null);
             await db.saveSetting('default_download_folder_path', null);
             await refreshDefaultLocationDisplay();
-        });
-    }
-
-    if (singleToFolderToggle) {
-        singleToFolderToggle.checked = modernSettings.downloadSinglesToFolder;
-        singleToFolderToggle.addEventListener('change', (e) => {
-            modernSettings.downloadSinglesToFolder = !!e.target.checked;
         });
     }
 
