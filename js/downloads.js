@@ -13,7 +13,9 @@ import {
 } from './utils.js';
 import { lyricsSettings, playlistSettings } from './storage.js';
 import { generateM3U, generateM3U8, generateCUE, generateNFO, generateJSON } from './playlist-generator.js';
-import { ZipStreamWriter, ZipBlobWriter, FolderPickerWriter, SequentialFileWriter } from './bulk-download-writer.ts';
+import { ZipStreamWriter, ZipBlobWriter, FolderPickerWriter, SequentialFileWriter, TauriFolderWriter } from './bulk-download-writer.ts';
+import { isTauri } from '@tauri-apps/api/core';
+import { open as openNativeDialog } from '@tauri-apps/plugin-dialog';
 import { FfmpegProgress } from './ffmpeg.types.js';
 import { DownloadProgress, ProgressMessage, SegmentedDownloadProgress } from './progressEvents.js';
 import { db } from './db.js';
@@ -539,6 +541,15 @@ async function createSingleTrackFolderWriter() {
         return null;
     }
 
+    // Use the Tauri fs plugin with a stored path, works on all platforms.
+    // The WebView lacks file system access api on Linux/macOS.
+    if (method === BulkDownloadMethod.Folder && isTauri()) {
+        const rememberFolder = modernSettings.rememberBulkDownloadFolder;
+        const defaultPath = await db.getSetting('default_download_folder_path');
+        const basePath = defaultPath ?? (rememberFolder ? await db.getSetting('bulk_download_folder_path') : null);
+        return basePath ? new TauriFolderWriter(basePath) : null;
+    }
+
     if (method === BulkDownloadMethod.Folder && hasFolderPicker) {
         const rememberFolder = modernSettings.rememberBulkDownloadFolder;
         const defaultHandle = await db.getSetting('default_download_folder_handle');
@@ -612,7 +623,33 @@ async function createBulkWriter(folderName) {
         // Browser without File System Access API - fall through to ZIP
     }
 
-    // ── Folder Picker method ─────────────────────────────────────────────────
+    // ── Folder Picker method (desktop app) ──────────────────────────────────
+    if (method === BulkDownloadMethod.Folder && isTauri()) {
+        const rememberFolder = modernSettings.rememberBulkDownloadFolder;
+        const defaultPath = await db.getSetting('default_download_folder_path');
+        let basePath = defaultPath ?? (rememberFolder ? await db.getSetting('bulk_download_folder_path') : null);
+
+        if (!basePath) {
+            basePath = await openNativeDialog({
+                directory: true,
+                multiple: false,
+                title: 'Choose download folder',
+            });
+            if (!basePath) {
+                throw new DOMException('User cancelled directory picker', 'AbortError');
+            }
+        }
+
+        if (rememberFolder) {
+            await db.saveSetting('bulk_download_folder_path', basePath);
+        } else {
+            await db.saveSetting('bulk_download_folder_path', null);
+        }
+
+        return new TauriFolderWriter(basePath);
+    }
+
+    // ── Folder Picker method (browser) ──────────────────────────────────────
     if (method === BulkDownloadMethod.Folder && hasFolderPicker) {
         const rememberFolder = modernSettings.rememberBulkDownloadFolder;
         const defaultHandle = await db.getSetting('default_download_folder_handle');
