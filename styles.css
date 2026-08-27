@@ -3147,6 +3147,29 @@ body.multi-select-mode .track-item:hover {
     appearance: auto; /* Force native dropdown for Tesla/Mobile */
 }
 
+.folder-location-control {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
+}
+
+.folder-location-control span {
+    color: var(--muted-foreground);
+    font-size: 0.8333rem;
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.folder-location-control .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.5rem;
+}
+
 .setting-item input[type='number'] {
     width: 100px;
 }

@@ -5591,6 +5591,34 @@
                                         <option value="individual">Individual Files</option>
                                     </select>
                                 </div>
+                                <div class="setting-item" id="default-download-location-setting">
+                                    <div class="info">
+                                        <span class="label">Default Download Location</span>
+                                        <span class="description"
+                                            >Folder Picker downloads are saved here without asking each time</span
+                                        >
+                                    </div>
+                                    <div class="folder-location-control">
+                                        <span id="default-download-location-name">Not set</span>
+                                        <button
+                                            id="default-download-location-btn"
+                                            class="btn-secondary"
+                                            title="Choose default download folder"
+                                            aria-label="Choose default download folder"
+                                        >
+                                            <use svg="!lucide/folder.svg" size="18" />
+                                        </button>
+                                        <button
+                                            id="default-download-location-clear-btn"
+                                            class="btn-secondary"
+                                            title="Clear default download folder"
+                                            aria-label="Clear default download folder"
+                                            style="display: none"
+                                        >
+                                            <use svg="!lucide/x.svg" size="18" />
+                                        </button>
+                                    </div>
+                                </div>
                                 <div class="setting-item" id="remember-folder-setting">
                                     <div class="info">
                                         <span class="label">Remember Last Folder</span>
