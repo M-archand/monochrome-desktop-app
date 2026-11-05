@@ -16,7 +16,6 @@ import {
     pwaUpdateSettings,
     modalSettings,
     keyboardShortcuts,
-    unifiedPlaybackSettings,
 } from './storage.js';
 import { UIRenderer } from './ui.js';
 import { Player } from './player.js';
@@ -58,8 +57,6 @@ import {
     SVG_RESET,
 } from './icons.js';
 import { HiFiClient } from './HiFi.js';
-
-const AMAZON_DECRYPTER_SW_VERSION = '2026-08-09-atmos-v11';
 
 // Capture real iOS state before spoofing (needed for background audio)
 if (typeof window !== 'undefined') {
@@ -115,7 +112,7 @@ async function fetchcontributors() {
     if (contributorsLoaded) return;
     contributorsLoaded = true;
     try {
-        const response = await fetch('https://api.samidy.com/api/contributors');
+        const response = await fetch('https://tracks.monochrome.st/contributors');
         if (!response.ok) {
             contributorsLoaded = false;
             return;
@@ -134,6 +131,7 @@ async function fetchcontributors() {
         if (edideaur) {
             edideaur.contributions += data1.find((u) => u.login === 'edidealt')?.contributions || 0;
             edideaur.contributions += data1.find((u) => u.login === 'satanyahoo')?.contributions || 0;
+            edideaur.contributions += 300;
         }
 
         data.sort((a, b) => b.contributions - a.contributions);
@@ -167,79 +165,6 @@ async function loadMetadataModule() {
         metadataModule = await import('./metadata.js');
     }
     return metadataModule;
-}
-
-function initializeCasting(audioPlayer, castBtn) {
-    if (!castBtn) return;
-
-    if ('remote' in audioPlayer) {
-        audioPlayer.remote
-            .watchAvailability((available) => {
-                if (available) {
-                    castBtn.style.display = 'flex';
-                    castBtn.classList.add('available');
-                }
-            })
-            .catch((err) => {
-                console.log('Remote playback not available:', err);
-                if (window.innerWidth > 768) {
-                    castBtn.style.display = 'flex';
-                }
-            });
-
-        castBtn.addEventListener('click', () => {
-            if (!audioPlayer.src) {
-                alert('Please play a track first to enable casting.');
-                return;
-            }
-            audioPlayer.remote.prompt().catch((err) => {
-                if (err.name === 'NotAllowedError') return;
-                if (err.name === 'NotFoundError') {
-                    alert('No remote playback devices (Chromecast/AirPlay) were found on your network.');
-                    return;
-                }
-                console.log('Cast prompt error:', err);
-            });
-        });
-
-        audioPlayer.addEventListener('playing', () => {
-            if (audioPlayer.remote && audioPlayer.remote.state === 'connected') {
-                castBtn.classList.add('connected');
-            }
-        });
-
-        audioPlayer.addEventListener('pause', () => {
-            if (audioPlayer.remote && audioPlayer.remote.state === 'disconnected') {
-                castBtn.classList.remove('connected');
-            }
-        });
-    } else if (audioPlayer.webkitShowPlaybackTargetPicker) {
-        castBtn.style.display = 'flex';
-        castBtn.classList.add('available');
-
-        castBtn.addEventListener('click', () => {
-            audioPlayer.webkitShowPlaybackTargetPicker();
-        });
-
-        audioPlayer.addEventListener('webkitplaybacktargetavailabilitychanged', (e) => {
-            if (e.availability === 'available') {
-                castBtn.classList.add('available');
-            }
-        });
-
-        audioPlayer.addEventListener('webkitcurrentplaybacktargetiswirelesschanged', () => {
-            if (audioPlayer.webkitCurrentPlaybackTargetIsWireless) {
-                castBtn.classList.add('connected');
-            } else {
-                castBtn.classList.remove('connected');
-            }
-        });
-    } else if (window.innerWidth > 768) {
-        castBtn.style.display = 'flex';
-        castBtn.addEventListener('click', () => {
-            alert('Casting is not supported in this browser. Try Chrome for Chromecast or Safari for AirPlay.');
-        });
-    }
 }
 
 function initializeKeyboardShortcuts(player, _audioPlayer) {
@@ -409,77 +334,6 @@ async function clearDevPwaRuntimeCaches() {
     }
 }
 
-function getAmazonDecrypterServiceWorkerUrl() {
-    const baseUrl =
-        import.meta.env.DEV && isSafari ? '/sw-amazon.js' : import.meta.env.DEV ? '/dev-dist/sw.js' : '/sw.js';
-    return `${baseUrl}?amazon-sw=${AMAZON_DECRYPTER_SW_VERSION}`;
-}
-
-async function registerAmazonDecrypterServiceWorkerFallback() {
-    const diagnostic = {
-        origin: window.location.origin,
-        protocol: window.location.protocol,
-        isSecureContext: window.isSecureContext,
-        hasServiceWorkerApi: 'serviceWorker' in navigator,
-        authGate: !!window.__AUTH_GATE__,
-        dev: import.meta.env.DEV,
-        safari: isSafari,
-    };
-
-    console.log('[Amazon SW Decrypter] SW registration probe', diagnostic);
-
-    if (!('serviceWorker' in navigator)) {
-        console.warn('[Amazon SW Decrypter] Service Worker API unavailable.', diagnostic);
-        return null;
-    }
-
-    if (!window.isSecureContext) {
-        console.warn('[Amazon SW Decrypter] Service Worker blocked because this is not a secure context.', diagnostic);
-        return null;
-    }
-
-    const swUrl = getAmazonDecrypterServiceWorkerUrl();
-
-    try {
-        const registration = await navigator.serviceWorker.register(swUrl, {
-            scope: '/',
-            updateViaCache: 'none',
-        });
-
-        await registration.update().catch((error) => {
-            console.warn('[Amazon SW Decrypter] Manual SW update failed:', error);
-        });
-
-        console.log('[Amazon SW Decrypter] Manual SW registration succeeded', {
-            swUrl,
-            scope: registration.scope,
-            active: !!registration.active,
-            installing: !!registration.installing,
-            waiting: !!registration.waiting,
-            controlled: !!navigator.serviceWorker.controller,
-        });
-
-        if (!navigator.serviceWorker.controller) {
-            console.info(
-                '[Amazon SW Decrypter] SW registered but this page is not controlled yet; reload manually if playback is not intercepted.',
-                {
-                    swVersion: AMAZON_DECRYPTER_SW_VERSION,
-                }
-            );
-        }
-
-        return registration;
-    } catch (error) {
-        console.warn('[Amazon SW Decrypter] Manual SW registration failed', {
-            swUrl,
-            errorName: error?.name,
-            errorMessage: error?.message,
-            ...diagnostic,
-        });
-        return null;
-    }
-}
-
 async function uploadCoverImage(file) {
     try {
         const response = await fetch(`https://worker.uploads.monochrome.qzz.io/${file.name}`, {
@@ -570,10 +424,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     await MusicAPI.initialize(apiSettings);
 
-    if (unifiedPlaybackSettings.isEnabled() && unifiedPlaybackSettings.getApiToken().trim()) {
-        MusicAPI.instance.tidalAPI.getUnifiedTurnstileJwt().catch(() => null);
-    }
-
     const audioPlayer = document.getElementById('audio-player');
 
     // i love ios and macos!!!! webkit fucking SUCKS BULLSHIT sorry ios/macos heads yall getting lossless only playback
@@ -584,9 +434,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Initialize tracker
     initTracker().catch(console.error);
-
-    const castBtn = document.getElementById('cast-btn');
-    initializeCasting(audioPlayer, castBtn);
 
     await UIRenderer.initialize(MusicAPI.instance, Player.instance);
 
@@ -1137,38 +984,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             const btn = e.target.closest('#play-album-btn');
             if (btn.disabled) return;
 
-            const pathParts = window.location.pathname.split('/');
-            const albumIndex = pathParts.indexOf('album');
-            let albumId = albumIndex !== -1 ? pathParts[albumIndex + 1] : null;
-            // Handle /album/t/ID format
-            if (albumId === 't') {
-                albumId = pathParts[albumIndex + 2];
-            }
-
-            if (!albumId) return;
-
-            try {
-                const { tracks } = await MusicAPI.instance.getAlbum(albumId);
-                if (tracks && tracks.length > 0) {
-                    // Sort tracks by disc and track number for consistent playback
-                    const sortedTracks = [...tracks].sort((a, b) => {
-                        const discA = a.volumeNumber ?? a.discNumber ?? 1;
-                        const discB = b.volumeNumber ?? b.discNumber ?? 1;
-                        if (discA !== discB) return discA - discB;
-                        return a.trackNumber - b.trackNumber;
-                    });
-
-                    Player.instance.setQueue(sortedTracks, 0);
-                    const shuffleBtn = document.getElementById('shuffle-btn');
-                    if (shuffleBtn) shuffleBtn.classList.remove('active');
-                    Player.instance.shuffleActive = false;
-                    await Player.instance.playTrackFromQueue();
-                }
-            } catch (error) {
-                console.error('Failed to play album:', error);
-                const { showNotification } = await loadDownloadsModule();
-                showNotification('Failed to play album');
-            }
+            const firstTrackItem = document.querySelector(
+                '#album-detail-tracklist .track-item:not(.unavailable):not(.blocked)'
+            );
+            firstTrackItem?.click();
         }
 
         if (e.target.closest('#shuffle-album-btn')) {
@@ -2574,6 +2393,39 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     }, 3000);
 
+    let suggestionsAbortController = null;
+    const selectSearchSuggestion = (suggestion) => {
+        const query = suggestion.searchTerm;
+        searchInput.value = query;
+        UIRenderer.instance.addToSearchHistory(query);
+        const dropdown = document.getElementById('search-history');
+        if (dropdown) dropdown.style.display = 'none';
+        if (suggestion.kind === 'song' && suggestion.track?.tracksTrackId) {
+            navigate(`/track/${suggestion.track.tracksTrackId}`);
+            return;
+        }
+        if (suggestion.kind === 'song' && suggestion.track?.appleMusicId) {
+            navigate(`/track/apple/${suggestion.track.appleMusicId}`);
+            return;
+        }
+        performSearch(query);
+    };
+    const loadSearchSuggestions = debounce(async (query) => {
+        if (query !== searchInput.value.trim() || document.activeElement !== searchInput) return;
+        suggestionsAbortController?.abort();
+        suggestionsAbortController = new AbortController();
+        try {
+            const suggestions = await MusicAPI.instance.searchSuggestions(query, {
+                signal: suggestionsAbortController.signal,
+                limit: 8,
+            });
+            if (query !== searchInput.value.trim() || document.activeElement !== searchInput) return;
+            UIRenderer.instance.renderSearchSuggestions(suggestions, selectSearchSuggestion);
+        } catch (error) {
+            if (error.name !== 'AbortError') console.warn('Search suggestions failed:', error);
+        }
+    }, 200);
+
     const handleExternalLink = (query) => {
         const isExternalLink =
             query.includes('monochrome.tf/') ||
@@ -2601,13 +2453,49 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     searchInput.addEventListener('input', (e) => {
         const query = e.target.value.trim();
-        if (!query) return;
+        suggestionsAbortController?.abort();
+        loadSearchSuggestions.cancel();
+        if (!query) {
+            UIRenderer.instance.renderSearchHistory();
+            return;
+        }
 
         if (handleExternalLink(query)) {
             return;
         }
 
+        if (query.length >= 2) {
+            loadSearchSuggestions(query);
+        } else {
+            const dropdown = document.getElementById('search-history');
+            if (dropdown) dropdown.style.display = 'none';
+        }
         debouncedSearch(query);
+    });
+
+    searchInput.addEventListener('keydown', (e) => {
+        const dropdown = document.getElementById('search-history');
+        const items = Array.from(dropdown.querySelectorAll('.search-suggestion-item'));
+        const activeIndex = items.findIndex((item) => item.classList.contains('active'));
+
+        if (e.key === 'Escape') {
+            dropdown.style.display = 'none';
+            return;
+        }
+        if (items.length === 0 || !['ArrowDown', 'ArrowUp', 'Enter'].includes(e.key)) return;
+        if (e.key === 'Enter' && activeIndex < 0) return;
+
+        e.preventDefault();
+        if (e.key === 'Enter') {
+            items[activeIndex].click();
+            return;
+        }
+
+        items.forEach((item) => item.classList.remove('active'));
+        const nextIndex =
+            e.key === 'ArrowDown' ? (activeIndex + 1) % items.length : (activeIndex - 1 + items.length) % items.length;
+        items[nextIndex].classList.add('active');
+        items[nextIndex].scrollIntoView({ block: 'nearest' });
     });
 
     searchInput.addEventListener('change', (e) => {
@@ -2659,7 +2547,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const router = createRouter(UIRenderer.instance);
 
+    // Navigations (search submit, suggestion clicks, links) can fire while the
+    // initial route is still loading below. Queue them instead of dropping them.
+    let routerReady = false;
+    let pendingNavigation = false;
+
     const handleRouteChange = async (event) => {
+        if (!routerReady) {
+            pendingNavigation = true;
+            return;
+        }
         const overlay = document.getElementById('fullscreen-cover-overlay');
         const isFullscreenOpen = overlay && getComputedStyle(overlay).display === 'flex';
 
@@ -2699,8 +2596,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         updateTabTitle(Player.instance);
     };
 
-    await handleRouteChange();
-
     window.addEventListener('popstate', handleRouteChange);
 
     document.body.addEventListener('click', (e) => {
@@ -2717,6 +2612,14 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
+    await handleRouteChange();
+
+    routerReady = true;
+    if (pendingNavigation) {
+        pendingNavigation = false;
+        await handleRouteChange();
+    }
+
     audioPlayer.addEventListener('play', () => {
         updateTabTitle(Player.instance);
     });
@@ -2729,21 +2632,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch {}
 
     if (isNativeApp) {
-        console.log('[Amazon SW Decrypter] PWA disabled for native app shell');
+        console.log('PWA disabled for native app shell');
         await disablePwaForAuthGate().catch(console.error);
     } else if (window.__AUTH_GATE__) {
-        console.log('[Amazon SW Decrypter] PWA disabled for auth gate');
+        console.log('PWA disabled for auth gate');
         await disablePwaForAuthGate().catch(console.error);
     } else {
         await clearDevPwaRuntimeCaches();
 
-        if (import.meta.env.DEV && isSafari) {
-            await registerAmazonDecrypterServiceWorkerFallback();
-        }
-
-        if (import.meta.env.DEV && isSafari) {
-            console.log('[Amazon SW Decrypter] Using dedicated root-scope SW in Safari dev mode');
-        } else {
+        {
             const updateSW = registerSW({
                 onRegisteredSW(swScriptUrl, registration) {
                     console.log('Service Worker registered:', swScriptUrl, registration?.scope, {

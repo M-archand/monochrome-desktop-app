@@ -6,6 +6,7 @@ import {
     fullscreenCoverClickSettings,
     lyricsSettings,
     backgroundSettings,
+    disableBlurEffectsSettings,
     dynamicColorSettings,
     cardSettings,
     artistBannerSettings,
@@ -35,7 +36,6 @@ import {
     pwaUpdateSettings,
     contentBlockingSettings,
     musicProviderSettings,
-    unifiedPlaybackSettings,
     deezerFallbackSettings,
     gaplessPlaybackSettings,
     analyticsSettings,
@@ -844,42 +844,6 @@ export async function initializeSettings(scrobbler, player, api, ui) {
             musicProviderSettings.setProvider(e.target.value);
             // Reload page to apply changes
             window.location.reload();
-        });
-    }
-
-    const unifiedPlaybackToggle = document.getElementById('unified-playback-toggle');
-    if (unifiedPlaybackToggle) {
-        unifiedPlaybackToggle.checked = unifiedPlaybackSettings.isEnabled();
-        unifiedPlaybackToggle.addEventListener('change', (e) => {
-            unifiedPlaybackSettings.setEnabled(e.target.checked);
-            api?.clearUnifiedTurnstileJwt?.();
-            api?.clearCache?.();
-            if (e.target.checked && unifiedPlaybackSettings.getApiToken().trim()) {
-                api?.getUnifiedTurnstileJwt?.().catch(() => null);
-            }
-        });
-    }
-
-    const unifiedApiBaseUrlInput = document.getElementById('unified-playback-api-base-url');
-    if (unifiedApiBaseUrlInput) {
-        unifiedApiBaseUrlInput.value = unifiedPlaybackSettings.getApiBaseUrl();
-        unifiedApiBaseUrlInput.addEventListener('change', (e) => {
-            unifiedPlaybackSettings.setApiBaseUrl(e.target.value.trim());
-            api?.clearUnifiedTurnstileJwt?.();
-            api?.clearCache?.();
-        });
-    }
-
-    const unifiedApiTokenInput = document.getElementById('unified-playback-api-token');
-    if (unifiedApiTokenInput) {
-        unifiedApiTokenInput.value = unifiedPlaybackSettings.getApiToken();
-        unifiedApiTokenInput.addEventListener('change', (e) => {
-            unifiedPlaybackSettings.setApiToken(e.target.value.trim());
-            api?.clearUnifiedTurnstileJwt?.();
-            api?.clearCache?.();
-            if (e.target.value.trim() && unifiedPlaybackSettings.isEnabled()) {
-                api?.getUnifiedTurnstileJwt?.().catch(() => null);
-            }
         });
     }
 
@@ -4758,8 +4722,27 @@ export async function initializeSettings(scrobbler, player, api, ui) {
                         }
                     }
                     if (bands.length === 0) return;
-                    parametricBands = bands;
-                    applyBandsToAudio(parametricBands);
+                    // Importing while on the AutoEQ tab saves a reference AutoEQ
+                    // profile instead of overwriting the Parametric EQ bands.
+                    if (currentMode === 'autoeq') {
+                        autoeqCurrentBands = bands.map((b, i) => ({ channel: 'stereo', ...b, id: i }));
+                        const profileName = file.name.replace(/\.(txt|csv)$/i, '') || 'Imported';
+                        const id = equalizerSettings.saveAutoEQProfile({
+                            id: 'autoeq_' + Date.now(),
+                            name: profileName,
+                            headphoneName: profileName,
+                            headphoneType: 'over-ear',
+                            bandCount: bands.length,
+                            bands: autoeqCurrentBands.map((b) => ({ ...b })),
+                            preamp,
+                        });
+                        if (id) equalizerSettings.setActiveAutoEQProfile(id);
+                        renderSavedProfiles();
+                        applyBandsToAudio(autoeqCurrentBands);
+                    } else {
+                        parametricBands = bands;
+                        applyBandsToAudio(parametricBands);
+                    }
                     equalizerSettings.setPreamp(preamp);
                     if (eqPreampSlider) eqPreampSlider.value = preamp;
                     if (autoeqPreampValue) autoeqPreampValue.textContent = `${preamp} dB`;
@@ -5921,6 +5904,16 @@ export async function initializeSettings(scrobbler, player, api, ui) {
         });
     }
 
+    // Disable Blur Effects Toggle
+    disableBlurEffectsSettings.apply();
+    const disableBlurEffectsToggle = document.getElementById('disable-blur-effects-toggle');
+    if (disableBlurEffectsToggle) {
+        disableBlurEffectsToggle.checked = disableBlurEffectsSettings.isEnabled();
+        disableBlurEffectsToggle.addEventListener('change', (e) => {
+            disableBlurEffectsSettings.setEnabled(e.target.checked);
+        });
+    }
+
     // Dynamic Color Toggle
     const dynamicColorToggle = document.getElementById('dynamic-color-toggle');
     if (dynamicColorToggle) {
@@ -6858,38 +6851,34 @@ export async function initializeSettings(scrobbler, player, api, ui) {
     const customDbModal = document.getElementById('custom-db-modal');
     const customPbUrlInput = document.getElementById('custom-pb-url');
     const customAppwriteEndpointInput = document.getElementById('custom-appwrite-endpoint');
-    const customAppwriteProjectInput = document.getElementById('custom-appwrite-project');
     const customDbSaveBtn = document.getElementById('custom-db-save');
     const customDbResetBtn = document.getElementById('custom-db-reset');
     const customDbCancelBtn = document.getElementById('custom-db-cancel');
 
     if (customDbBtn && customDbModal) {
-        const appwriteFromEnv = !!(window.__APPWRITE_ENDPOINT__ || window.__APPWRITE_PROJECT_ID__);
+        const authFromEnv = !!(window.__AUTH_URL__ || window.__APPWRITE_ENDPOINT__);
         const pbFromEnv = !!window.__POCKETBASE_URL__;
 
         // Hide entire setting if both are server-configured
-        if (appwriteFromEnv && pbFromEnv) {
+        if (authFromEnv && pbFromEnv) {
             const settingItem = customDbBtn.closest('.setting-item');
             if (settingItem) settingItem.style.display = 'none';
         }
 
         // Hide individual fields in the modal
         if (pbFromEnv && customPbUrlInput) customPbUrlInput.closest('div[style]').style.display = 'none';
-        if (appwriteFromEnv) {
-            if (customAppwriteEndpointInput) customAppwriteEndpointInput.closest('div[style]').style.display = 'none';
-            if (customAppwriteProjectInput) customAppwriteProjectInput.closest('div[style]').style.display = 'none';
-        }
+        if (authFromEnv && customAppwriteEndpointInput)
+            customAppwriteEndpointInput.closest('div[style]').style.display = 'none';
 
         customDbBtn.addEventListener('click', () => {
             const pbUrl = localStorage.getItem('monochrome-pocketbase-url') || '';
-            const appwriteEndpoint = localStorage.getItem('monochrome-appwrite-endpoint') || '';
-            const appwriteProject = localStorage.getItem('monochrome-appwrite-project') || '';
+            const authEndpoint =
+                localStorage.getItem('monochrome-auth-url') ||
+                localStorage.getItem('monochrome-appwrite-endpoint') ||
+                '';
 
             if (!pbFromEnv && customPbUrlInput) customPbUrlInput.value = pbUrl;
-            if (!appwriteFromEnv) {
-                if (customAppwriteEndpointInput) customAppwriteEndpointInput.value = appwriteEndpoint;
-                if (customAppwriteProjectInput) customAppwriteProjectInput.value = appwriteProject;
-            }
+            if (!authFromEnv && customAppwriteEndpointInput) customAppwriteEndpointInput.value = authEndpoint;
 
             customDbModal.classList.add('active');
         });
@@ -6911,21 +6900,17 @@ export async function initializeSettings(scrobbler, player, api, ui) {
                 }
             }
 
-            if (!appwriteFromEnv) {
+            if (!authFromEnv) {
                 const endpoint = customAppwriteEndpointInput?.value.trim();
-                const project = customAppwriteProjectInput?.value.trim();
 
                 if (endpoint) {
-                    localStorage.setItem('monochrome-appwrite-endpoint', endpoint);
+                    localStorage.setItem('monochrome-auth-url', endpoint);
                 } else {
-                    localStorage.removeItem('monochrome-appwrite-endpoint');
+                    localStorage.removeItem('monochrome-auth-url');
                 }
-
-                if (project) {
-                    localStorage.setItem('monochrome-appwrite-project', project);
-                } else {
-                    localStorage.removeItem('monochrome-appwrite-project');
-                }
+                // cleanup legacy appwrite keys
+                localStorage.removeItem('monochrome-appwrite-endpoint');
+                localStorage.removeItem('monochrome-appwrite-project');
             }
 
             alert('Settings saved. Reloading...');
@@ -6935,6 +6920,7 @@ export async function initializeSettings(scrobbler, player, api, ui) {
         customDbResetBtn.addEventListener('click', () => {
             if (confirm('Reset custom database settings to default?')) {
                 localStorage.removeItem('monochrome-pocketbase-url');
+                localStorage.removeItem('monochrome-auth-url');
                 localStorage.removeItem('monochrome-appwrite-endpoint');
                 localStorage.removeItem('monochrome-appwrite-project');
                 alert('Settings reset. Reloading...');

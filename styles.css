@@ -1514,6 +1514,10 @@ body.has-page-background .track-item:hover {
     background: var(--secondary);
 }
 
+.search-history-item.active {
+    background: var(--secondary);
+}
+
 .search-history-item .history-icon {
     color: var(--muted-foreground);
     opacity: 0.5;
@@ -1522,9 +1526,37 @@ body.has-page-background .track-item:hover {
 
 .search-history-item .query-text {
     flex: 1;
+    min-width: 0;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.search-suggestion-cover {
+    width: 40px;
+    height: 40px;
+    flex-shrink: 0;
+    border-radius: var(--radius-sm);
+    object-fit: cover;
+    outline: 1px solid rgb(0 0 0 / 10%);
+}
+
+[data-theme='dark'] .search-suggestion-cover,
+.dark .search-suggestion-cover {
+    outline-color: rgb(255 255 255 / 10%);
+}
+
+.search-suggestion-title,
+.search-suggestion-subtitle {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.search-suggestion-subtitle {
+    margin-top: 0.125rem;
+    color: var(--muted-foreground);
+    font-size: 0.8rem;
 }
 
 .search-history-item .delete-history-btn {
@@ -2447,6 +2479,15 @@ body.multi-select-mode .track-item:hover {
 .track-item-details .artist {
     font-size: 0.9rem;
     color: var(--muted-foreground);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.track-lyric-snippet {
+    margin-top: 0.125rem;
+    color: var(--muted-foreground);
+    font-size: 0.8rem;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -4874,13 +4915,6 @@ input:checked + .slider::before {
     }
 }
 
-.fullscreen-actions {
-    display: flex;
-    gap: 1rem;
-    justify-content: center;
-    margin-top: 0.75rem;
-}
-
 #queue-modal {
     background-color: var(--card);
     width: 90%;
@@ -5473,6 +5507,24 @@ input:checked + .slider::before {
     min-width: 300px;
 }
 
+.notification-message {
+    display: flex;
+    align-items: flex-start;
+}
+
+.error-report-link {
+    display: inline-block;
+    margin-top: 0.45rem;
+    color: var(--muted-foreground);
+    font-size: 0.75rem;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.error-report-link:hover {
+    color: var(--foreground);
+}
+
 .download-cancel:hover {
     background: var(--secondary) !important;
     color: var(--foreground) !important;
@@ -5486,41 +5538,6 @@ input:checked + .slider::before {
 
 .desktop-only {
     display: flex;
-}
-
-#cast-btn {
-    position: relative;
-}
-
-#cast-btn.available {
-    color: var(--highlight);
-}
-
-#cast-btn.available::before {
-    content: '';
-    position: absolute;
-    top: 6px;
-    right: 6px;
-    width: 6px;
-    height: 6px;
-    background-color: var(--highlight);
-    border-radius: var(--radius-full);
-    animation: pulse 2s infinite;
-}
-
-#cast-btn.connected {
-    color: #10b981;
-}
-
-#cast-btn.connected::after {
-    content: '';
-    position: absolute;
-    top: 6px;
-    right: 6px;
-    width: 8px;
-    height: 8px;
-    background-color: #10b981;
-    border-radius: var(--radius-full);
 }
 
 #download-current-btn:disabled {
@@ -6933,39 +6950,6 @@ img[src=''] {
 
     .desktop-only {
         display: none !important;
-    }
-
-    /* position the cast button on mobile to the bottom right cuz damn shit already cluttered */
-    #cast-btn {
-        position: absolute !important;
-        bottom: 10px !important;
-        right: 10px !important;
-        z-index: 10 !important;
-        background: transparent !important;
-        border: none !important;
-        border-radius: 0 !important;
-        width: 24px !important;
-        height: 24px !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        box-shadow: none !important;
-        padding: 0 !important;
-    }
-
-    #cast-btn:hover {
-        background: transparent !important;
-        transform: none !important;
-    }
-
-    #cast-btn svg {
-        width: 20px !important;
-        height: 20px !important;
-    }
-
-    .now-playing-bar .player-controls {
-        position: relative !important;
-        padding-bottom: 50px !important;
     }
 
     .player-controls.waveform-loaded {
@@ -10868,13 +10852,11 @@ body:has(#side-panel.active) #close-fullscreen-cover-btn {
 }
 
 #fullscreen-cover-overlay #fullscreen-track-artist {
-    margin: 0.12rem 0 0;
     font-size: 0.84rem;
     color: rgb(255 255 255 / 0.74);
 }
 
 #fullscreen-cover-overlay #fullscreen-track-album {
-    margin: 0.12rem 0 0;
     font-size: 0.94rem;
     color: rgb(255 255 255 / 0.74);
 }
@@ -10882,32 +10864,6 @@ body:has(#side-panel.active) #close-fullscreen-cover-btn {
 #fullscreen-cover-overlay #toggle-fullscreen-lyrics-btn,
 #fullscreen-cover-overlay .fullscreen-lyrics-toggle {
     display: flex;
-}
-
-#fullscreen-cover-overlay .fullscreen-actions {
-    display: flex !important;
-    align-items: center;
-    gap: 0.5rem;
-    margin-top: 0.9rem;
-}
-
-#fullscreen-cover-overlay .fullscreen-actions .btn-icon {
-    width: 38px;
-    height: 38px;
-    padding: 0;
-    border-radius: 999px;
-    color: rgb(255 255 255 / 0.74);
-    background: transparent;
-    transition:
-        color 0.2s ease,
-        background-color 0.2s ease,
-        transform 0.2s ease;
-}
-
-#fullscreen-cover-overlay .fullscreen-actions .btn-icon:hover {
-    color: rgb(255 255 255 / 0.96);
-    background: rgb(255 255 255 / 0.08);
-    transform: scale(1.03);
 }
 
 #fullscreen-cover-overlay #fullscreen-next-track {
@@ -11412,10 +11368,6 @@ body:has(#side-panel.active) #close-fullscreen-cover-btn {
         margin-top: 0;
         font-size: 0.92rem;
         color: rgb(255 255 255 / 0.7);
-    }
-
-    #fullscreen-cover-overlay .fullscreen-actions {
-        display: none !important;
     }
 
     #fullscreen-cover-overlay #fullscreen-next-track {
@@ -11929,21 +11881,6 @@ img.cd {
     color: var(--primary);
 }
 
-.donate-alt-section {
-    padding-top: 1.5rem;
-    border-top: 1px solid var(--border);
-}
-
-.donate-alt-text {
-    font-size: 0.9rem;
-    color: var(--muted-foreground);
-    margin-bottom: 1rem;
-}
-
-.donate-github-btn {
-    text-decoration: none;
-}
-
 #sidebar-nav-donate {
     border-radius: var(--radius);
     transition:
@@ -12089,4 +12026,35 @@ body.sidebar-collapsed #sidebar-nav-donate {
     font-size: 0.76rem;
     line-height: 1.45;
     color: var(--muted-foreground);
+}
+
+/* Disable Blur Effects preference */
+:root.disable-blur-effects,
+:root.disable-blur-effects *,
+:root.disable-blur-effects *::before,
+:root.disable-blur-effects *::after {
+    /* stylelint-disable-next-line property-no-vendor-prefix */
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+}
+
+/* Keep the album background's existing color treatment while removing its blur. */
+:root.disable-blur-effects #page-background {
+    filter: brightness(0.4) !important;
+}
+
+:root.disable-blur-effects[data-theme='white'] #page-background {
+    filter: brightness(1.6) opacity(0.35) !important;
+}
+
+/* Preserve the visualizer's saturation and brightness when its CSS blur is disabled. */
+:root.disable-blur-effects #fullscreen-cover-overlay:not(.ui-hidden) #visualizer-container {
+    filter: saturate(0.9) brightness(0.8) !important;
+}
+
+:root.disable-blur-effects .synced-line,
+:root.disable-blur-effects .synced-line.active,
+:root.disable-blur-effects .synced-line.upcoming,
+:root.disable-blur-effects .synced-line.past {
+    filter: none !important;
 }

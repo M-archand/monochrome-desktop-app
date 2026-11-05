@@ -917,20 +917,6 @@ export interface TidalAudioNormData {
 }
 
 /**
- * DRM licence data embedded in a track manifest attributes object.
- */
-export interface DrmData {
-    /** DRM system identifier, e.g. `"WIDEVINE"`. */
-    drmSystem: string;
-    /** Licence acquisition URL. */
-    licenseUrl: string;
-    /** Certificate URL. */
-    certificateUrl: string;
-    /** DRM initialisation data, or `null`. */
-    initData: string | null;
-}
-
-/**
  * Attributes of a single track-manifest resource from the TIDAL OpenAPI.
  *
  * @remarks
@@ -952,8 +938,6 @@ export interface TrackManifestAttributes {
     albumAudioNormalizationData: TidalAudioNormData;
     /** Track-level audio normalisation data. */
     trackAudioNormalizationData: TidalAudioNormData;
-    /** DRM data (only present when the track is DRM-protected). */
-    drmData?: DrmData;
 }
 
 /**
@@ -1100,9 +1084,7 @@ class HiFiClient {
         return HiFiClient.#instance;
     }
 
-    /**
-     * The base URL to use for adjusting widevine license URLs.
-     */
+    /** The base URL to use for API requests. */
     #baseUrl: string | null = null;
     #token: string | null = null;
     #refreshToken: string | null = null;
@@ -1525,24 +1507,7 @@ class HiFiClient {
         }
 
         const res = await this.#fetchJson<TrackManifestApiResponse>(url, params, signal);
-        const drmData = res.data.attributes.drmData;
-
-        if (drmData && this.#baseUrl) {
-            const url = `${this.#baseUrl.replace(/\/+$/g, '')}/widevine`;
-            drmData.licenseUrl = url;
-            drmData.certificateUrl = url;
-        }
-
         return HiFiClient.#jsonResponse({ version: HiFiClient.API_VERSION, data: res });
-    }
-
-    /**
-     * Fetches a raw Widevine licence response from the TIDAL API.
-     *
-     * @returns The raw {@link Response} from the Widevine endpoint.
-     */
-    async getWidevine(): Promise<Response> {
-        return await this.#fetchAuthenticated('https://api.tidal.com/v2/widevine');
     }
 
     /**
@@ -2269,8 +2234,9 @@ class HiFiClient {
                 // fallback to text search
             }
             const fallback = await this.#fetchJson<any>(
-                `https://openapi.tidal.com/v2/searchResults/${encodeURIComponent(i)}`,
+                'https://openapi.tidal.com/v2/searchResults',
                 {
+                    'filter[query]': i,
                     limit,
                     offset,
                     include: 'tracks,tracks.artists,tracks.albums,tracks.albums.coverArt',
@@ -2292,8 +2258,9 @@ class HiFiClient {
         const mapping: Array<[string | undefined, string, Params]> = [
             [
                 q,
-                `https://openapi.tidal.com/v2/searchResults/${encodeURIComponent(q || '')}`,
+                `https://openapi.tidal.com/v2/searchResults`,
                 {
+                    'filter[query]': q,
                     limit,
                     offset,
                     include: includeQ,
@@ -2302,28 +2269,28 @@ class HiFiClient {
             ],
             [
                 s,
-                `https://openapi.tidal.com/v2/searchResults/${encodeURIComponent(s || '')}`,
-                { limit, offset, include: includeS, countryCode: this.#countryCode },
+                'https://openapi.tidal.com/v2/searchResults',
+                { 'filter[query]': s, limit, offset, include: includeS, countryCode: this.#countryCode },
             ],
             [
                 a,
-                `https://openapi.tidal.com/v2/searchResults/${encodeURIComponent(a || '')}`,
-                { limit, offset, include: includeA, countryCode: this.#countryCode },
+                'https://openapi.tidal.com/v2/searchResults',
+                { 'filter[query]': a, limit, offset, include: includeA, countryCode: this.#countryCode },
             ],
             [
                 al,
-                `https://openapi.tidal.com/v2/searchResults/${encodeURIComponent(al || '')}`,
-                { limit, offset, include: includeAl, countryCode: this.#countryCode },
+                'https://openapi.tidal.com/v2/searchResults',
+                { 'filter[query]': al, limit, offset, include: includeAl, countryCode: this.#countryCode },
             ],
             [
                 v,
-                `https://openapi.tidal.com/v2/searchResults/${encodeURIComponent(v || '')}`,
-                { limit, offset, include: includeV, countryCode: this.#countryCode },
+                'https://openapi.tidal.com/v2/searchResults',
+                { 'filter[query]': v, limit, offset, include: includeV, countryCode: this.#countryCode },
             ],
             [
                 p,
-                `https://openapi.tidal.com/v2/searchResults/${encodeURIComponent(p || '')}`,
-                { limit, offset, include: includeP, countryCode: this.#countryCode },
+                'https://openapi.tidal.com/v2/searchResults',
+                { 'filter[query]': p, limit, offset, include: includeP, countryCode: this.#countryCode },
             ],
         ];
 
@@ -2560,7 +2527,9 @@ class HiFiClient {
                 case '/info':
                     return new TidalResponse(await this.getInfo(Number(qp.id)));
                 case '/track':
-                    return new TidalResponse(await this.getTrack(Number(qp.id), qp.quality || undefined));
+                    return new TidalResponse(
+                        await this.getTrack(Number(qp.id), qp.quality || undefined, qp.immersiveAudio === 'true')
+                    );
                 case '/recommendations':
                     return new TidalResponse(await this.getRecommendations(Number(qp.id)));
                 case '/artist/similar':
@@ -2651,8 +2620,6 @@ class HiFiClient {
                             adaptive: Boolean(qp.adaptive?.toLowerCase()) || undefined,
                         })
                     );
-                case '/widevine':
-                    return new TidalResponse(await this.getWidevine());
                 default:
                     throw new Error(`Unknown route: ${pathname}`);
             }

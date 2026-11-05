@@ -10,6 +10,7 @@ import {
     getExtensionFromBlob,
     escapeHtml,
     getTrackDiscNumber,
+    buildErrorReportUrl,
 } from './utils.js';
 import { lyricsSettings, playlistSettings } from './storage.js';
 import { generateM3U, generateM3U8, generateCUE, generateNFO, generateJSON } from './playlist-generator.js';
@@ -164,25 +165,46 @@ function friendlyEnrichError(error) {
     return msg || 'the track could not be prepared for download';
 }
 
-export function showNotification(message) {
+// Transient playback/download failures that are not actionable bugs.
+// Never offer a GitHub "Report this issue" link for these — they flood the tracker.
+const NO_ISSUE_REPORT_PATTERN =
+    /could not find audio source|failed to play album|couldn'?t download|failed to download/i;
+
+export function showNotification(message, options = {}) {
+    if (typeof options === 'string') options = { type: options };
     const container = createDownloadNotification();
 
     const notifEl = document.createElement('div');
     notifEl.className = 'download-task';
 
     const innerDiv = document.createElement('div');
-    innerDiv.style.display = 'flex';
-    innerDiv.style.alignItems = 'start';
+    innerDiv.className = 'notification-message';
     innerDiv.textContent = message;
     notifEl.appendChild(innerDiv);
+
+    const isError =
+        options.type === 'error' ||
+        /\b(error|failed|failure|could not|couldn't|cannot|unable|unavailable|not found)\b/i.test(String(message));
+    if (isError && options.reportIssue !== false && !NO_ISSUE_REPORT_PATTERN.test(String(message))) {
+        const reportLink = document.createElement('a');
+        reportLink.className = 'error-report-link';
+        reportLink.href = buildErrorReportUrl(message, options.details || options.error || null);
+        reportLink.target = '_blank';
+        reportLink.rel = 'noopener noreferrer';
+        reportLink.textContent = 'Report this issue';
+        notifEl.appendChild(reportLink);
+    }
 
     container.appendChild(notifEl);
 
     // Auto remove
-    setTimeout(() => {
-        notifEl.style.animation = 'slide-out 0.3s ease forwards';
-        setTimeout(() => notifEl.remove(), 300);
-    }, 1500);
+    setTimeout(
+        () => {
+            notifEl.style.animation = 'slide-out 0.3s ease forwards';
+            setTimeout(() => notifEl.remove(), 300);
+        },
+        isError ? 10000 : 1500
+    );
 }
 
 export function addDownloadTask(trackId, track, _filename, api, abortController) {
@@ -394,7 +416,10 @@ async function bulkDownload({
                     fileFraction = Math.min(fileFraction, 0.99); // Cap at 99% to avoid showing 100% before finalization
                     updateBulkDownloadProgress(notification, i + fileFraction, tracks.length, trackTitle, p);
                 });
-                const filename = buildTrackFilename(track, quality, extension);
+                // Playlists/queues/liked lists mix tracks from many albums, so use
+                // the list sequence; albums/discographies keep album numbers.
+                const sequenceNumber = type === 'playlist' || type === 'queue' || type === 'liked' ? i + 1 : null;
+                const filename = buildTrackFilename(track, quality, extension, sequenceNumber);
                 const discNumber = discLayout.resolveDiscNumber(i);
                 const discPath = separateByDisc ? `${getDiscFolderName(discNumber)}/${filename}` : filename;
 
@@ -417,6 +442,15 @@ async function bulkDownload({
                                     name: buildZipTrackPath(folderName, lrcFilename, separateByDisc, discNumber),
                                     lastModified: new Date(),
                                     input: lrcContent,
+                                };
+                            }
+                            const ttmlContent = lyricsManager.generateTTMLContent(lyricsData, track);
+                            if (ttmlContent) {
+                                const ttmlFilename = filename.replace(/\.[^.]+$/, '.ttml');
+                                yield {
+                                    name: buildZipTrackPath(folderName, ttmlFilename, separateByDisc, discNumber),
+                                    lastModified: new Date(),
+                                    input: ttmlContent,
                                 };
                             }
                         }
@@ -803,6 +837,19 @@ export async function downloadDiscography(artist, selectedReleases, api, quality
     const signal = abortController.signal;
     const stats = { failed: 0, total: 0, firstError: null };
 
+    // Different versions of the same album (standard/deluxe) otherwise produce
+    // identical folder paths and entry names. Disambiguate folders per
+    // release and skip exact-duplicate entries (e.g. repeated cover.jpg).
+    const seenFolders = new Set();
+    const seenEntries = new Set();
+    async function* dedupeEntries(generator) {
+        for await (const entry of generator) {
+            if (seenEntries.has(entry.name)) continue;
+            seenEntries.add(entry.name);
+            yield entry;
+        }
+    }
+
     async function* yieldDiscography() {
         for (let albumIndex = 0; albumIndex < selectedReleases.length; albumIndex++) {
             if (signal.aborted) break;
@@ -825,7 +872,12 @@ export async function downloadDiscography(artist, selectedReleases, api, quality
                     year: year,
                 });
 
-                const fullFolderPath = `${rootFolder}/${albumFolder}`;
+                let fullFolderPath = `${rootFolder}/${albumFolder}`;
+                const versionSuffix = fullAlbum.version || String(fullAlbum.id ?? album.id ?? '');
+                if (seenFolders.has(fullFolderPath) && versionSuffix) {
+                    fullFolderPath = `${fullFolderPath} [${sanitizeForFilename(versionSuffix)}]`;
+                }
+                seenFolders.add(fullFolderPath);
                 if (coverBlob && playlistSettings.shouldIncludeCover())
                     yield { name: `${fullFolderPath}/cover.jpg`, lastModified: new Date(), input: coverBlob };
 
@@ -870,6 +922,20 @@ export async function downloadDiscography(artist, selectedReleases, api, quality
                                             ),
                                             lastModified: new Date(),
                                             input: lrcContent,
+                                        };
+                                    }
+                                    const ttmlContent = lyricsManager.generateTTMLContent(lyricsData, track);
+                                    if (ttmlContent) {
+                                        const ttmlFilename = filename.replace(/\.[^.]+$/, '.ttml');
+                                        yield {
+                                            name: buildZipTrackPath(
+                                                fullFolderPath,
+                                                ttmlFilename,
+                                                separateByDisc,
+                                                discNumber
+                                            ),
+                                            lastModified: new Date(),
+                                            input: ttmlContent,
                                         };
                                     }
                                 }
@@ -948,7 +1014,7 @@ export async function downloadDiscography(artist, selectedReleases, api, quality
         const writer = await createBulkWriter(rootFolder);
 
         if (writer) {
-            await writer.write(yieldDiscography());
+            await writer.write(dedupeEntries(yieldDiscography()));
         }
 
         completeBulkDownload(notification, true, null, {
@@ -1212,6 +1278,16 @@ export async function downloadTrackWithMetadata(
                             input: lyricsManager.getLRC(lyricsData, track),
                         })
                     );
+                    const ttmlFile = lyricsManager.getTTML(lyricsData, track);
+                    if (ttmlFile) {
+                        await folderWriter.write(
+                            singleWriterEntry({
+                                name: [...entryName.split('.').slice(0, -1), 'ttml'].join('.'),
+                                lastModified: new Date(),
+                                input: ttmlFile,
+                            })
+                        );
+                    }
                 }
             } catch {
                 console.log('Could not download lyrics for track');

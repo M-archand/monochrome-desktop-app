@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { getProxyUrl, isTidalAudioUrl } from '../proxy-utils.js';
+import { getProxyUrl, isTidalAudioUrl, wrapTidalUrl } from '../proxy-utils.js';
 
 describe('proxy-utils', () => {
     test('returns original TIDAL audio segment URLs directly without audio proxying', () => {
@@ -15,5 +15,17 @@ describe('proxy-utils', () => {
             'https://resources.tidal.com/images/cover.jpg'
         );
         expect(getProxyUrl('https://cdn.example.com/audio/1.mp4')).toBe('https://cdn.example.com/audio/1.mp4');
+    });
+
+    test('routes TIDAL API and web requests through the proxy worker', () => {
+        expect(wrapTidalUrl('https://openapi.tidal.com/v2/albums/1')).toBe(
+            'https://tidal-proxy.monochrome.tf/openapi/v2/albums/1'
+        );
+        expect(wrapTidalUrl('https://api.tidal.com/v1/tracks/1')).toBe(
+            'https://tidal-proxy.monochrome.tf/api/v1/tracks/1'
+        );
+        expect(wrapTidalUrl('https://tidal.com/browse/mix/1')).toBe(
+            'https://tidal-proxy.monochrome.tf/tidal/browse/mix/1'
+        );
     });
 });

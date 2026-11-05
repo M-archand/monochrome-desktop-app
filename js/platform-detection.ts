@@ -14,7 +14,8 @@ export const isSafari =
     lowerCaseOriginalUserAgent.includes('safari') &&
     !lowerCaseOriginalUserAgent.includes('chrome') &&
     !lowerCaseOriginalUserAgent.includes('crios') &&
-    !lowerCaseOriginalUserAgent.includes('android');
+    !lowerCaseOriginalUserAgent.includes('android') &&
+    !lowerCaseOriginalUserAgent.includes('linux');
 
 /** If the browser is Chrome. */
 export const isChrome = lowerCaseOriginalUserAgent.includes('chrome') || lowerCaseOriginalUserAgent.includes('crios');
@@ -25,42 +26,11 @@ export const isFirefox = lowerCaseOriginalUserAgent.includes('firefox') && !isCh
 /** If the browser is Microsoft Edge. */
 export const isEdge = lowerCaseOriginalUserAgent.includes('edg/') || lowerCaseOriginalUserAgent.includes('edge/');
 
-type AmazonDecrypterBrowser = {
-    isFirefox: boolean;
-    isSafari: boolean;
-};
-
-type NavigatorWithUserAgentData = Navigator & {
-    userAgentData?: {
-        brands?: Array<{ brand: string }>;
-    };
-};
-
-/**
- * Choose the container emitted by the service-worker Amazon decrypter.
- *
- * Firefox cannot reliably consume the progressively rewritten fragmented MP4:
- * after enough playback it may request a sample past the bytes it has buffered
- * and abort with MediaResult/SampleIterator decoding errors. Segmented HLS
- * avoids that progressive-resource path while retaining seekable time ranges.
- */
-export function getAmazonDecrypterCodec(
-    quality: string,
-    browser: AmazonDecrypterBrowser = { isFirefox, isSafari }
-): 'opus' | 'mp4a' | 'eac3' | 'ac4' | 'flac-hls' | 'flac-raw' | 'flac' {
-    const normalizedQuality = quality.toUpperCase();
-    if (normalizedQuality.startsWith('DOLBY_ATMOS_AC4_')) return 'ac4';
-    if (normalizedQuality.startsWith('DOLBY_ATMOS_EAC3_') || normalizedQuality === 'DOLBY_ATMOS') return 'eac3';
-    const isOpusQuality =
-        normalizedQuality === 'HIGH' ||
-        normalizedQuality === 'NORMAL' ||
-        normalizedQuality === 'LOW' ||
-        normalizedQuality.startsWith('SD_');
-    if (isOpusQuality) return 'opus';
-    if (browser.isSafari) return 'flac-hls';
-    if (browser.isFirefox) return 'flac-hls';
-    return 'flac';
-}
+/** If the browser is WebKitGTK. */
+export const isWebKitGtk =
+    lowerCaseOriginalUserAgent.includes('webkit') &&
+    lowerCaseOriginalUserAgent.includes('mozilla') &&
+    lowerCaseOriginalUserAgent.includes('linux');
 
 /** Check whether the runtime reports native support for an immersive MP4 codec. */
 export function canBrowserStreamAtmosQuality(quality: string, mediaElement: HTMLMediaElement | null = null): boolean {
@@ -81,15 +51,6 @@ export function canBrowserStreamAtmosQuality(quality: string, mediaElement: HTML
             (typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported?.(mimeType) === true)
     );
 }
-
-const chromiumBrandPattern = /chromium|chrome|edge|opera|brave/i;
-const userAgentBrands = (navigator as NavigatorWithUserAgentData).userAgentData?.brands ?? [];
-
-/** If this browser has Chromium's native ClearKey/CENC behavior we rely on for Amazon streams. */
-export const canUseNativeAmazonCenc =
-    !isIos &&
-    !isSafari &&
-    (userAgentBrands.some((brand) => chromiumBrandPattern.test(brand.brand)) || 'chrome' in globalThis);
 
 export function getLocalFilesSupportInfo(): { supported: boolean; message: string | null } {
     const isFileSystemAccessSupported = 'showDirectoryPicker' in window;

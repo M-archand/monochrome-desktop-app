@@ -102,32 +102,98 @@ import {
     SVG_LEFT_ARROW,
     SVG_RIGHT_ARROW,
     SVG_CLOCK,
+    SVG_SEARCH,
     SVG_CHECKBOX,
 } from './icons.js';
 
-const AOTY_BASE = 'https://aoty.prigoana.pw';
+const AOTY_BASE = 'https://aoty.edideaur.works';
 const AOTY_CACHE_TTL = 86_400_000; // 24 hours
+const AOTY_CACHE_PREFIX = 'aoty_cache_v2_'; // bumped when base moved to aoty.edideaur.works
+const AOTY_FETCH_TIMEOUT_MS = 15_000;
+// openapi.json declares scores/counts as integer|null, but the live API also
+// emits numeric strings ("80"), comma counts ("3,087") and the "NR" sentinel.
+function aotyScore(v) {
+    if (v == null) return null;
+    if (typeof v === 'number') return Number.isFinite(v) ? Math.trunc(v) : null;
+    const s = String(v).trim();
+    if (!s || s.toUpperCase() === 'NR') return null;
+    const n = Number(s.replace(/,/g, ''));
+    return Number.isFinite(n) ? Math.trunc(n) : null;
+}
+
+function aotyCount(v) {
+    return aotyScore(v);
+}
+
+// ListDetailItem rank is integer|null per spec, string per live API.
+function aotyRank(v) {
+    if (v == null || v === '') return '';
+    if (typeof v === 'number' && Number.isFinite(v)) return String(Math.trunc(v));
+    return String(v).trim();
+}
+
+// Live /list/{slug} items use a combined "Artist - Title" string while the
+// spec documents separate artist/album/title fields. Support both.
+function aotySplitArtistTitle(combined) {
+    const s = String(combined || '');
+    const sep = s.indexOf(' - ');
+    if (sep > 0) return { artist: s.slice(0, sep).trim(), title: s.slice(sep + 3).trim() };
+    return { artist: '', title: s.trim() };
+}
+
+function aotyListItemParts(item) {
+    const artist = item?.artist || aotySplitArtistTitle(item?.album || item?.title).artist;
+    const title = item?.album || aotySplitArtistTitle(item?.title).title || item?.title || '';
+    return { artist: artist || '', title: title || '', rank: aotyRank(item?.rank) };
+}
 
 function aotyCoverUrl(url) {
     if (!url) return url;
     return String(url).replace(/(https?:\/\/cdn2\.albumoftheyear\.org\/)\d+x0\//, '$15000x0/');
 }
 
-async function fetchAOTY(path) {
-    const key = `aoty_cache_${path}`;
+async function fetchAOTY(path, { timeoutMs = AOTY_FETCH_TIMEOUT_MS, skipCache = false } = {}) {
+    if (!path || !path.startsWith('/')) throw new Error(`AOTY: path must start with "/": ${path}`);
+    const key = `${AOTY_CACHE_PREFIX}${path}`;
+    if (!skipCache) {
+        try {
+            const raw = localStorage.getItem(key);
+            if (raw) {
+                const { ts, data } = JSON.parse(raw);
+                if (Date.now() - ts < AOTY_CACHE_TTL) return data;
+            }
+        } catch {}
+    }
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    let res;
     try {
-        const raw = localStorage.getItem(key);
-        if (raw) {
-            const { ts, data } = JSON.parse(raw);
-            if (Date.now() - ts < AOTY_CACHE_TTL) return data;
-        }
-    } catch {}
-    const res = await fetch(`${AOTY_BASE}${path}`);
-    if (!res.ok) throw new Error(`AOTY request failed: ${res.status}`);
+        res = await fetch(`${AOTY_BASE}${path}`, {
+            headers: { Accept: 'application/json' },
+            signal: ctrl.signal,
+        });
+    } catch (e) {
+        if (e?.name === 'AbortError') throw new Error(`AOTY request timed out: ${path}`);
+        throw e;
+    } finally {
+        clearTimeout(timer);
+    }
+    if (!res.ok) {
+        let detail = '';
+        try {
+            const body = await res.json();
+            detail = body?.detail ? `, ${body.detail}` : '';
+        } catch {}
+        const err = new Error(`AOTY request failed: ${res.status} ${path}${detail}`);
+        err.status = res.status;
+        throw err;
+    }
     const data = await res.json();
-    try {
-        localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data }));
-    } catch {}
+    if (!skipCache) {
+        try {
+            localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data }));
+        } catch {}
+    }
     return data;
 }
 
@@ -233,7 +299,11 @@ export class UIRenderer {
         this.renderLock = false;
         this.lastRecommendedTracks = [];
         this.currentArtistId = null;
-        this.fullscreenLyricsVisible = true;
+        try {
+            this.fullscreenLyricsVisible = localStorage.getItem('fullscreen-lyrics-visible') !== 'false';
+        } catch {
+            this.fullscreenLyricsVisible = true;
+        }
         this.fullscreenPlaybackStateCleanup = null;
         this.fullscreenDismissHandleCleanup = null;
         this.fullscreenLyricsToggleCleanup = null;
@@ -384,7 +454,7 @@ export class UIRenderer {
                             ? this.api.getArtistPictureUrl(item.cover)
                             : this.api.getCoverUrl(item.cover);
                     const coverClass = item.type === 'artist' ? 'artist' : '';
-                    iconHTML = `<img crossorigin="anonymous" referrerpolicy="no-referrer" src="${coverUrl}" class="pinned-item-cover ${coverClass}" alt="${escapeHtml(item.name)}" loading="lazy" onerror="this.src='assets/logo.svg'">`;
+                    iconHTML = `<img crossorigin="anonymous" referrerpolicy="no-referrer" src="${coverUrl}" class="pinned-item-cover ${coverClass}" alt="${escapeHtml(item.name)}" loading="lazy" onerror="this.src='images/monochrome_logo.svg'">`;
                 }
 
                 return `
@@ -516,14 +586,14 @@ export class UIRenderer {
             if (isVideo && this.currentPage === 'playlist') {
                 const videoCoverUrl = this.api.getVideoCoverUrl(track.imageId);
                 if (videoCoverUrl) {
-                    trackImageHTML = `<img crossorigin="anonymous" referrerpolicy="no-referrer" src="${videoCoverUrl}" alt="" class="track-item-cover" loading="lazy">`;
+                    trackImageHTML = `<img crossorigin="anonymous" referrerpolicy="no-referrer" src="${videoCoverUrl}" alt="" class="track-item-cover" loading="eager" onerror="this.src='images/monochrome_logo.svg';this.onerror=null;">`;
                 } else {
                     trackImageHTML = `<div class="track-item-cover video-icon-placeholder" style="display: flex; align-items: center; justify-content: center; background: var(--secondary);">${SVG_VIDEO(20, { style: 'opacity: 0.7;' })}</div>`;
                 }
             } else if (isVideo && (this.currentPage === 'search' || this.currentPage === 'library')) {
                 const videoCoverUrl = this.api.getVideoCoverUrl(track.imageId);
                 if (videoCoverUrl) {
-                    trackImageHTML = `<img crossorigin="anonymous" referrerpolicy="no-referrer" src="${videoCoverUrl}" alt="" class="track-item-cover" loading="lazy">`;
+                    trackImageHTML = `<img crossorigin="anonymous" referrerpolicy="no-referrer" src="${videoCoverUrl}" alt="" class="track-item-cover" loading="eager" onerror="this.src='images/monochrome_logo.svg';this.onerror=null;">`;
                 } else {
                     trackImageHTML = `<div class="track-item-cover video-icon-placeholder" style="display: flex; align-items: center; justify-content: center; background: var(--secondary);">${SVG_PLAY(16, { style: 'opacity: 0.7;' })}</div>`;
                 }
@@ -532,7 +602,7 @@ export class UIRenderer {
                     track.image || track.cover || track.album?.cover,
                     'Track Cover',
                     'track-item-cover',
-                    'lazy'
+                    'eager'
                 );
             }
         }
@@ -562,6 +632,9 @@ export class UIRenderer {
         }
 
         const yearDisplay = getTrackYearDisplay(track);
+        const lyricSnippetHTML = track.lyricSnippet
+            ? `<div class="track-lyric-snippet">Lyrics: “${escapeHtml(track.lyricSnippet)}”</div>`
+            : '';
 
         const actionsHTML = isUnavailable
             ? ''
@@ -615,6 +688,7 @@ export class UIRenderer {
                             ${qualityBadge}
                         </div>
                         <div class="artist">${getTrackArtistsHTML(track)}${yearDisplay}</div>
+                        ${lyricSnippetHTML}
                     </div>
                 </div>
                 ${inlineLikeHTML}
@@ -630,7 +704,7 @@ export class UIRenderer {
         cover,
         alt,
         className = 'card-image',
-        loading = 'lazy',
+        loading = 'eager',
         videoCoverUrl = null,
         isEditorsPick = false,
         type = 'album'
@@ -642,8 +716,11 @@ export class UIRenderer {
             size = '160';
         }
 
-        const imageUrl =
+        let imageUrl =
             type === 'artist' ? this.api.getArtistPictureUrl(cover, size) : this.api.getCoverUrl(cover, size);
+        if (!imageUrl) {
+            imageUrl = 'images/monochrome_logo.svg';
+        }
 
         if (videoCoverUrl) {
             return `<video src="${videoCoverUrl}" poster="${imageUrl}" class="${className}" alt="${alt}" preload="metadata" playsinline muted></video>`;
@@ -661,10 +738,12 @@ export class UIRenderer {
             const tidalUrl = `https://resources.tidal.com/images/${formattedId}/320x320.jpg`;
             const wsrvUrl = `https://wsrv.nl/?url=${encodeURIComponent(tidalUrl)}&w=250&h=250&output=webp`;
             const fetchPriorityAttr = loading === 'eager' ? ' fetchpriority="high"' : '';
-            return `<img crossorigin="anonymous" referrerpolicy="no-referrer" src="${wsrvUrl}" class="${className}" alt="${alt}" loading="${loading}"${fetchPriorityAttr}>`;
+            return `<img crossorigin="anonymous" referrerpolicy="no-referrer" src="${wsrvUrl}" class="${className}" alt="${alt}" loading="${loading}"${fetchPriorityAttr} onerror="this.src='images/monochrome_logo.svg';this.onerror=null;">`;
         }
 
-        return `<img crossorigin="anonymous" referrerpolicy="no-referrer" src="${imageUrl}" class="${className}" alt="${alt}" loading="${loading}">`;
+        const loadingAttr = loading && loading !== 'eager' ? ` loading="${loading}"` : '';
+        const fetchPriorityAttr = loading === 'eager' ? ' fetchpriority="high"' : '';
+        return `<img crossorigin="anonymous" referrerpolicy="no-referrer" src="${imageUrl}" class="${className}" alt="${alt}"${loadingAttr}${fetchPriorityAttr} onerror="this.src='images/monochrome_logo.svg';this.onerror=null;">`;
     }
 
     createBaseCardHTML({
@@ -721,7 +800,7 @@ export class UIRenderer {
         return this.createBaseCardHTML({
             type: 'playlist',
             id: playlist.uuid,
-            href: `/playlist/${playlist.uuid}`,
+            href: playlist._href || `/playlist/${playlist.uuid}`,
             title: playlist.title,
             subtitle: `${playlist.numberOfTracks || 0} tracks`,
             imageHTML: `<img crossorigin="anonymous" referrerpolicy="no-referrer" src="${this.api.getCoverUrl(imageId)}" alt="${playlist.title}" class="card-image" loading="lazy">`,
@@ -949,7 +1028,7 @@ export class UIRenderer {
         return this.createBaseCardHTML({
             type: 'artist',
             id: artist.id,
-            href: `/artist/${artist.id}`,
+            href: artist._href || `/artist/${artist.id}`,
             title: escapeHtml(artist.name),
             subtitle: '',
             imageHTML: this.getCoverHTML(
@@ -1359,6 +1438,7 @@ export class UIRenderer {
             if (qualityMenu) qualityMenu.style.display = 'none';
 
             const videoCoverUrl = track.videoUrl || track.videoCoverUrl || track.album?.videoCoverUrl || null;
+            const videoCoverResult = track.videoCoverResult || videoCoverUrl;
             const coverUrl = videoCoverUrl || this.api.getCoverUrl(track.album?.cover, '1280');
 
             const fsLikeBtn = document.getElementById('fs-like-btn');
@@ -1366,14 +1446,32 @@ export class UIRenderer {
                 await this.updateLikeState(fsLikeBtn.parentElement, track.type || 'track', track.id);
             }
 
-            const currentImage = document.getElementById('fullscreen-cover-image');
+            let currentImage = document.getElementById('fullscreen-cover-image');
+            if (!currentImage) {
+                const artworkCard = document.getElementById('fullscreen-artwork-card');
+                if (artworkCard) {
+                    for (const node of artworkCard.childNodes) {
+                        if (node.nodeType === Node.TEXT_NODE && node.textContent.trim() === 'null') {
+                            node.remove();
+                        }
+                    }
+                    currentImage = document.createElement('img');
+                    currentImage.id = 'fullscreen-cover-image';
+                    currentImage.alt = 'Album Cover';
+                    currentImage.crossOrigin = 'anonymous';
+                    currentImage.referrerPolicy = 'no-referrer';
+                    currentImage.src = this.api.getCoverUrl(track.album?.cover, '1280');
+                    artworkCard.prepend(currentImage);
+                }
+            }
+
+            if (!currentImage) return;
 
             if (videoCoverUrl) {
-                const isPaused = this.player?.activeElement?.paused ?? true;
+                let video = currentImage;
                 if (currentImage.tagName === 'IMG') {
-                    const video = document.createElement('video');
-                    video.src = videoCoverUrl;
-                    video.autoplay = !isPaused;
+                    video = document.createElement('video');
+                    video.autoplay = true;
                     video.loop = true;
                     video.muted = true;
                     video.playsInline = true;
@@ -1381,24 +1479,26 @@ export class UIRenderer {
                     video.className = currentImage.className;
                     video.id = currentImage.id;
                     video.style.objectFit = 'cover';
+                    video.poster = currentImage.src;
                     currentImage.replaceWith(video);
-                    if (!isPaused) {
-                        video.play().catch(() => {});
-                    }
-                } else if (currentImage.src !== videoCoverUrl) {
-                    currentImage.src = videoCoverUrl;
-                    if (!isPaused) {
-                        currentImage.play().catch(() => {});
-                    } else {
-                        currentImage.pause();
-                    }
-                } else {
-                    if (!isPaused) {
-                        currentImage.play().catch(() => {});
-                    } else {
-                        currentImage.pause();
-                    }
+                    await this.setupHlsVideo(video, videoCoverResult, currentImage);
+                    video.dataset.videoCoverUrl = videoCoverUrl;
+                } else if (currentImage.dataset.videoCoverUrl !== videoCoverUrl) {
+                    currentImage._hls?.destroy();
+                    currentImage.autoplay = true;
+                    const fallbackImg = document.createElement('img');
+                    fallbackImg.id = currentImage.id;
+                    fallbackImg.className = currentImage.className;
+                    fallbackImg.alt = 'Album Cover';
+                    fallbackImg.crossOrigin = 'anonymous';
+                    fallbackImg.referrerPolicy = 'no-referrer';
+                    fallbackImg.src = this.api.getCoverUrl(track.album?.cover, '1280');
+                    currentImage.poster = fallbackImg.src;
+                    await this.setupHlsVideo(currentImage, videoCoverResult, fallbackImg);
+                    currentImage.dataset.videoCoverUrl = videoCoverUrl;
                 }
+                video.addEventListener('playing', () => video.removeAttribute('poster'), { once: true });
+                video.play().catch(() => {});
             } else {
                 if (currentImage.tagName === 'VIDEO') {
                     const img = document.createElement('img');
@@ -1451,6 +1551,11 @@ export class UIRenderer {
         coverCard?.classList.toggle('cd', isCdMode);
         cdRing?.classList.toggle('cd', isCdMode);
 
+        const needsVideoCover = track.type !== 'video' && !track.videoCoverResult;
+        const videoCoverRequest = needsVideoCover
+            ? this.api.getVideoArtwork(getTrackTitle(track), getTrackArtists(track))
+            : null;
+
         await this.updateFullscreenMetadata(track, nextTrack);
 
         if (nextTrack) {
@@ -1465,13 +1570,11 @@ export class UIRenderer {
             lyricsManager && activeElement && lyricsPane && lyricsContent && track.type !== 'video'
         );
         if (canRenderLyrics) {
-            this.fullscreenLyricsVisible = true;
             if (lyricsToggleBtn) lyricsToggleBtn.style.removeProperty('display');
             overlay.classList.remove('lyrics-unavailable');
             clearFullscreenLyricsSync(lyricsContent);
             await renderLyricsInFullscreen(track, activeElement, lyricsManager, lyricsContent);
         } else {
-            this.fullscreenLyricsVisible = false;
             if (lyricsToggleBtn) lyricsToggleBtn.style.display = 'none';
             overlay.classList.add('lyrics-unavailable');
             if (lyricsContent) {
@@ -1502,6 +1605,24 @@ export class UIRenderer {
 
         this.setupFullscreenControls();
         overlay.style.display = 'flex';
+
+        if (videoCoverRequest) {
+            try {
+                const result = await videoCoverRequest;
+                const videoCoverUrl = result?.videoUrl || result?.hlsUrl;
+                if (
+                    videoCoverUrl &&
+                    this.player?.currentTrack?.id === track.id &&
+                    getComputedStyle(overlay).display !== 'none'
+                ) {
+                    track.videoCoverUrl = videoCoverUrl;
+                    track.videoCoverResult = result;
+                    await this.updateFullscreenMetadata(track, this.player?.getNextTrack());
+                }
+            } catch (error) {
+                console.warn('Failed to load fullscreen video artwork:', error);
+            }
+        }
 
         if (fullscreenCoverNoRoundSettings.isEnabled()) {
             overlay.classList.add('fullscreen-cover-no-round');
@@ -1551,6 +1672,9 @@ export class UIRenderer {
         if (!overlay || overlay.classList.contains('lyrics-unavailable')) return false;
 
         this.fullscreenLyricsVisible = !this.fullscreenLyricsVisible;
+        try {
+            localStorage.setItem('fullscreen-lyrics-visible', String(this.fullscreenLyricsVisible));
+        } catch {}
         this.updateFullscreenLyricsVisibility(overlay);
         return true;
     }
@@ -2103,7 +2227,6 @@ export class UIRenderer {
         const fsLikeBtn = document.getElementById('fs-like-btn');
         const fsAddPlaylistBtn = document.getElementById('fs-add-playlist-btn');
         const fsDownloadBtn = document.getElementById('fs-download-btn');
-        const fsCastBtn = document.getElementById('fs-cast-btn');
         const fsQueueBtn = document.getElementById('fs-queue-btn');
         const artistEl = document.getElementById('fullscreen-track-artist');
         const albumEl = document.getElementById('fullscreen-track-album');
@@ -2299,9 +2422,6 @@ export class UIRenderer {
         }
         if (fsDownloadBtn) {
             fsDownloadBtn.onclick = () => document.getElementById('download-current-btn')?.click();
-        }
-        if (fsCastBtn) {
-            fsCastBtn.onclick = () => document.getElementById('cast-btn')?.click();
         }
         if (fsQueueBtn) {
             fsQueueBtn.onclick = () => {
@@ -2555,7 +2675,6 @@ export class UIRenderer {
     async loadDonateGoal() {
         this.setupCryptoCopy();
 
-        const goal = document.getElementById('donate-goal');
         const goalPercent = document.getElementById('donate-goal-percent');
         const goalProgress = document.getElementById('donate-goal-progress');
         const donateBtn = document.querySelector('#page-donate a.btn-primary');
@@ -2564,24 +2683,23 @@ export class UIRenderer {
         const sidebarText = document.getElementById('sidebar-donate-goal-text');
 
         try {
-            const response = await fetch('https://goal.samidy.xyz/index.json');
+            const response = await fetch('https://tracks.monochrome.st/goal');
             const data = await response.json();
-            if (data && data.goal) {
-                const current = data.goal.current_amount || 0;
-                const target = data.goal.target_amount || 1000;
-                const percentage = Math.min(100, Math.max(0, (current / target) * 100));
+            let percentage = 0;
 
-                if (goal)
-                    goal.textContent = `$${current.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-                if (goalPercent) goalPercent.textContent = `${percentage.toFixed(1)}%`;
-                if (goalProgress) goalProgress.style.width = `${percentage}%`;
+            if (data && data.percentage) {
+                // New format: {"percentage":"76%"}
+                percentage = parseFloat(data.percentage.replace('%', ''));
+            }
 
-                if (sidebarText) {
-                    sidebarText.textContent = `${percentage.toFixed(0)}%`;
-                }
-                if (sidebarProgress) {
-                    sidebarProgress.style.width = `${percentage}%`;
-                }
+            if (goalPercent) goalPercent.textContent = `${percentage.toFixed(1)}%`;
+            if (goalProgress) goalProgress.style.width = `${percentage}%`;
+
+            if (sidebarText) {
+                sidebarText.textContent = `${percentage.toFixed(0)}%`;
+            }
+            if (sidebarProgress) {
+                sidebarProgress.style.width = `${percentage}%`;
             }
         } catch (error) {
             // lowk wrapping it in the try-catch for the larp
@@ -3116,8 +3234,13 @@ export class UIRenderer {
             { id: 'discover', label: 'Discover' },
             { id: 'releases', label: 'New Releases' },
             { id: 'musthear', label: 'Must Hear' },
+            { id: 'charts', label: 'Charts' },
+            { id: 'genres', label: 'Genres' },
+            { id: 'songs', label: 'Songs' },
+            { id: 'search', label: 'Search' },
             { id: 'news', label: 'News' },
             { id: 'lists', label: 'Critic Lists' },
+            { id: 'shuffle', label: 'Shuffle' },
         ];
 
         const pill = (active) =>
@@ -3125,7 +3248,7 @@ export class UIRenderer {
 
         container.innerHTML = `
             <div style="font-size:0.72rem;color:var(--muted-foreground);margin-bottom:0.9rem;">
-                Powered by <a href="https://aoty.prigoana.pw/" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:none;">aoty-api</a>
+                Powered by <a href="https://aoty.edideaur.works/" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:none;">aoty-api</a>
                 &nbsp;·&nbsp;
                 <a href="https://ko-fi.com/edideaur" target="_blank" rel="noopener" style="color:var(--primary);text-decoration:none;">consider donating</a>
             </div>
@@ -3165,8 +3288,13 @@ export class UIRenderer {
             discover: () => this.renderAOTYDiscover(view),
             releases: () => this.renderAOTYReleases(view),
             musthear: () => this.renderAOTYMustHear(view),
+            charts: () => this.renderAOTYCharts(view),
+            genres: () => this.renderAOTYGenres(view),
+            songs: () => this.renderAOTYSongs(view),
+            search: () => this.renderAOTYSearch(view),
             news: () => this.renderAOTYNews(view),
             lists: () => this.renderAOTYLists(view),
+            shuffle: () => this.renderAOTYShuffle(view),
         };
         if (handlers[tabId]) await handlers[tabId]();
     }
@@ -3201,13 +3329,22 @@ export class UIRenderer {
     async renderAOTYReleases(container) {
         container.innerHTML = `<div class="card-grid">${this.createSkeletonCards(12)}</div>`;
         try {
-            const [albums, singles] = await Promise.all([
+            const [albums, singles, thisWeek, thisWeekSingles, upcoming] = await Promise.all([
                 fetchAOTY('/releases').catch(() => null),
                 fetchAOTY('/releases/singles').catch(() => null),
+                fetchAOTY('/releases/this-week').catch(() => null),
+                fetchAOTY('/releases/this-week/singles').catch(() => null),
+                fetchAOTY('/upcoming').catch(() => null),
             ]);
             container.innerHTML = '';
+            updateAOTYMustHearIndex([...(albums?.albums || []), ...(thisWeek?.albums || [])]);
+            if (thisWeek?.albums?.length) this.renderAOTYSection(container, 'This Week', thisWeek.albums);
+            if (thisWeekSingles?.albums?.length)
+                this.renderAOTYSection(container, 'This Week, Singles', thisWeekSingles.albums);
             if (albums?.albums?.length) this.renderAOTYSection(container, 'New Albums', albums.albums);
             if (singles?.albums?.length) this.renderAOTYSection(container, 'New Singles', singles.albums);
+            if (upcoming?.albums?.length)
+                this.renderAOTYSection(container, 'Upcoming', upcoming.albums, { isUpcoming: true });
             if (!container.children.length) container.innerHTML = createPlaceholder('No new releases.');
         } catch (e) {
             console.error(e);
@@ -3217,7 +3354,8 @@ export class UIRenderer {
 
     async renderAOTYMustHear(container) {
         const currentYear = new Date().getFullYear();
-        const currentDecadeStart = Math.floor(currentYear / 10) * 10;
+        // openapi.json only allows 1950s..2020s for `decade`.
+        const currentDecadeStart = Math.min(Math.floor(currentYear / 10) * 10, 2020);
 
         const DECADES = [];
         for (let d = currentDecadeStart; d >= 1950; d -= 10) DECADES.push(d);
@@ -3283,7 +3421,7 @@ export class UIRenderer {
                 contentDiv.innerHTML = '';
                 if (data.albums?.length) {
                     updateAOTYMustHearIndex(data.albums);
-                    this.renderAOTYSection(contentDiv, `Must Hear — ${d}s`, data.albums);
+                    this.renderAOTYSection(contentDiv, `Must Hear, ${d}s`, data.albums);
                 } else {
                     contentDiv.innerHTML = createPlaceholder('No must-hear albums found.');
                 }
@@ -3341,14 +3479,14 @@ export class UIRenderer {
                 const img = document.createElement('img');
                 img.crossOrigin = 'anonymous';
                 img.referrerPolicy = 'no-referrer';
-                img.src = aotyCoverUrl(item.image) || 'assets/logo.svg';
+                img.src = aotyCoverUrl(item.image) || 'images/monochrome_logo.svg';
                 img.width = 88;
                 img.height = 56;
                 img.style.cssText =
                     'width:88px;height:56px;border-radius:6px;object-fit:cover;flex-shrink:0;background:var(--secondary);';
                 img.loading = 'lazy';
                 img.onerror = () => {
-                    img.src = 'assets/logo.svg';
+                    img.src = 'images/monochrome_logo.svg';
                     img.onerror = null;
                 };
                 el.appendChild(img);
@@ -3420,12 +3558,12 @@ export class UIRenderer {
                     const thumb = document.createElement('img');
                     thumb.crossOrigin = 'anonymous';
                     thumb.referrerPolicy = 'no-referrer';
-                    thumb.src = entry.cover || 'assets/logo.svg';
+                    thumb.src = entry.cover || 'images/monochrome_logo.svg';
                     thumb.width = 44;
                     thumb.height = 44;
                     thumb.loading = 'lazy';
                     thumb.onerror = () => {
-                        thumb.src = 'assets/logo.svg';
+                        thumb.src = 'images/monochrome_logo.svg';
                         thumb.onerror = null;
                     };
                     thumb.style.cssText =
@@ -3461,6 +3599,384 @@ export class UIRenderer {
         await loadLists(currentYear);
     }
 
+    renderAOTYRankedRows(container, title, items) {
+        if (!items?.length) return;
+        const section = document.createElement('section');
+        section.className = 'content-section';
+        section.innerHTML = `<h2 class="section-title">${escapeHtml(title)}</h2>`;
+        const list = document.createElement('div');
+        for (const item of items) {
+            const rank = aotyRank(item.rank);
+            const artist = item.artist || '';
+            const name = item.album || item.title || '';
+            const url = item.albumUrl || item.url || '';
+            const aotyUrl = url.startsWith('http') ? url : `https://www.albumoftheyear.org${url}`;
+            const score = aotyScore(item.score ?? item.scoreExact ?? item.exactScore);
+            const points = aotyCount(item.points);
+            const badge = score != null ? String(score) : points != null ? `${points} pts` : '';
+            const metaParts = [
+                artist,
+                item.date,
+                ...(item.genres?.slice(0, 2) || []),
+                item.ratingCount != null ? `${item.ratingCount} ratings` : '',
+                item.listsCount != null ? `${item.listsCount} lists` : '',
+                item.album && item.title && item.album !== item.title ? item.title : '',
+            ].filter(Boolean);
+
+            const row = document.createElement('div');
+            row.style.cssText =
+                'display:flex;align-items:center;gap:1rem;padding:0.75rem 0;border-bottom:1px solid var(--border);cursor:pointer;';
+            row.innerHTML = `
+                ${rank ? `<span style="font-size:0.8rem;font-weight:700;color:var(--primary);min-width:2rem;text-align:right;flex-shrink:0;">#${escapeHtml(rank)}</span>` : ''}
+                <img crossorigin="anonymous" referrerpolicy="no-referrer" src="${aotyCoverUrl(item.cover || item.artistImage) || 'images/monochrome_logo.svg'}" width="48" height="48"
+                    style="border-radius:6px;object-fit:cover;flex-shrink:0;background:var(--secondary);"
+                    loading="lazy" onerror="this.src='images/monochrome_logo.svg';this.onerror=null;">
+                <div style="flex:1;min-width:0;">
+                    <div style="font-weight:500;font-size:0.875rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" class="row-title"></div>
+                    <div style="font-size:0.75rem;color:var(--muted-foreground);margin-top:2px;" class="row-meta"></div>
+                </div>
+                ${badge ? `<div style="font-size:0.8rem;font-weight:700;color:var(--primary-foreground);background:var(--primary);padding:2px 7px;border-radius:5px;flex-shrink:0;">${escapeHtml(badge)}</div>` : ''}`;
+            row.querySelector('.row-title').textContent = name;
+            row.querySelector('.row-meta').textContent = metaParts.join(' · ');
+            row.addEventListener('click', async () => {
+                row.style.opacity = '0.5';
+                row.style.pointerEvents = 'none';
+                try {
+                    const found = await this.findAOTYAlbumInLibrary(artist, name);
+                    if (found) navigate(`/album/${found.id}`);
+                    else if (aotyUrl) window.open(aotyUrl, '_blank', 'noopener');
+                } finally {
+                    row.style.opacity = '';
+                    row.style.pointerEvents = '';
+                }
+            });
+            list.appendChild(row);
+        }
+        section.appendChild(list);
+        container.appendChild(section);
+    }
+
+    async renderAOTYCharts(container) {
+        const currentYear = new Date().getFullYear();
+        const years = Array.from({ length: currentYear - 1970 + 1 }, (_, i) => currentYear - i);
+        container.innerHTML = `
+            <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1.25rem;">
+                <select id="aoty-charts-year" style="padding:0.3rem 0.6rem;border-radius:6px;border:1px solid var(--border);background:var(--background);color:var(--foreground);font-size:0.85rem;cursor:pointer;">
+                    ${years.map((y) => `<option value="${y}">${y}</option>`).join('')}
+                </select>
+            </div>
+            <div id="aoty-charts-content"></div>
+        `;
+        const contentDiv = container.querySelector('#aoty-charts-content');
+        const loadCharts = async (year) => {
+            contentDiv.innerHTML = `<div class="card-grid">${this.createSkeletonCards(6)}</div>`;
+            try {
+                const [criticAgg, communityAgg, topRated] = await Promise.all([
+                    fetchAOTY(`/list/summary?year=${year}`).catch(() => null),
+                    fetchAOTY(`/year-end?year=${year}`).catch(() => null),
+                    fetchAOTY(`/ratings?period=${year}`).catch(() => null),
+                ]);
+                contentDiv.innerHTML = '';
+                if (criticAgg?.items?.length)
+                    this.renderAOTYRankedRows(
+                        contentDiv,
+                        `Critic Aggregate ${year}${criticAgg.totalLists ? ` · ${criticAgg.totalLists} lists` : ''}`,
+                        criticAgg.items
+                    );
+                if (communityAgg?.items?.length)
+                    this.renderAOTYRankedRows(
+                        contentDiv,
+                        `Community Year-End ${year}${communityAgg.totalLists ? ` · ${communityAgg.totalLists} lists` : ''}`,
+                        communityAgg.items
+                    );
+                if (topRated?.items?.length) this.renderAOTYRankedRows(contentDiv, `Top Rated ${year}`, topRated.items);
+                if (!contentDiv.children.length) contentDiv.innerHTML = createPlaceholder('No chart data found.');
+            } catch (e) {
+                console.error(e);
+                contentDiv.innerHTML = createPlaceholder('Failed to load charts.');
+            }
+        };
+        container.querySelector('#aoty-charts-year').addEventListener('change', (e) => loadCharts(e.target.value));
+        await loadCharts(currentYear);
+    }
+
+    async renderAOTYGenres(container) {
+        container.innerHTML = `<div class="card-grid">${this.createSkeletonCards(12)}</div>`;
+        const loadIndex = async () => {
+            container.innerHTML = `<div class="card-grid">${this.createSkeletonCards(12)}</div>`;
+            try {
+                const data = await fetchAOTY('/genres');
+                container.innerHTML = '';
+                if (!data.genres?.length) {
+                    container.innerHTML = createPlaceholder('No genres found.');
+                    return;
+                }
+                const chips = document.createElement('div');
+                chips.style.cssText = 'display:flex;flex-wrap:wrap;gap:0.4rem;margin-bottom:1.5rem;';
+                for (const g of data.genres) {
+                    const slug = (g.url || '').split('/').filter(Boolean).pop() || '';
+                    if (!slug) continue;
+                    const btn = document.createElement('button');
+                    btn.textContent = g.name || slug;
+                    btn.style.cssText =
+                        'padding:0.32rem 0.9rem;border-radius:2rem;border:1px solid var(--border);background:transparent;color:var(--muted-foreground);cursor:pointer;font-size:0.82rem;font-weight:500;white-space:nowrap;';
+                    btn.addEventListener('click', () => loadGenre(slug, g.name || slug));
+                    chips.appendChild(btn);
+                }
+                container.appendChild(chips);
+                for (const g of data.genres) {
+                    if (g.albums?.length) this.renderAOTYSection(container, g.name || 'Genre', g.albums);
+                }
+                if (!container.children.length) container.innerHTML = createPlaceholder('No genres found.');
+            } catch (e) {
+                console.error(e);
+                container.innerHTML = createPlaceholder('Failed to load genres.');
+            }
+        };
+        const loadGenre = async (slug, name) => {
+            container.innerHTML = `<div class="card-grid">${this.createSkeletonCards(12)}</div>`;
+            try {
+                const data = await fetchAOTY(`/genre?slug=${encodeURIComponent(slug)}`);
+                container.innerHTML = '';
+                const back = document.createElement('button');
+                back.textContent = '← All genres';
+                back.style.cssText =
+                    'padding:0.32rem 0.9rem;border-radius:2rem;border:1px solid var(--border);background:transparent;color:var(--muted-foreground);cursor:pointer;font-size:0.82rem;font-weight:500;margin-bottom:1rem;';
+                back.addEventListener('click', loadIndex);
+                container.appendChild(back);
+                const title = document.createElement('h2');
+                title.className = 'section-title';
+                title.textContent = data.name || name || 'Genre';
+                container.appendChild(title);
+                if (data.childGenres?.length) {
+                    const chips = document.createElement('div');
+                    chips.style.cssText = 'display:flex;flex-wrap:wrap;gap:0.4rem;margin-bottom:1.5rem;';
+                    for (const c of data.childGenres) {
+                        const cSlug = (c.url || '').split('/').filter(Boolean).pop() || '';
+                        if (!cSlug) continue;
+                        const btn = document.createElement('button');
+                        btn.textContent = c.name || cSlug;
+                        btn.style.cssText =
+                            'padding:0.28rem 0.7rem;border-radius:2rem;border:1px solid var(--border);background:transparent;color:var(--muted-foreground);cursor:pointer;font-size:0.78rem;font-weight:500;';
+                        btn.addEventListener('click', () => loadGenre(cSlug, c.name || cSlug));
+                        chips.appendChild(btn);
+                    }
+                    container.appendChild(chips);
+                }
+                for (const s of data.sections || []) {
+                    if (s.albums?.length) this.renderAOTYSection(container, s.title || 'Albums', s.albums);
+                }
+                if (data.items?.length) this.renderAOTYRankedRows(container, 'Top Albums', data.items);
+                if (!container.children.length) container.innerHTML = createPlaceholder('No genre data found.');
+            } catch (e) {
+                console.error(e);
+                container.innerHTML = createPlaceholder('Failed to load genre.');
+            }
+        };
+        await loadIndex();
+    }
+
+    async renderAOTYSongs(container) {
+        const currentYear = new Date().getFullYear();
+        const years = Array.from({ length: currentYear - 1970 + 1 }, (_, i) => currentYear - i);
+        const pill = (active) =>
+            `padding:0.32rem 0.9rem;border-radius:2rem;border:1px solid ${active ? 'var(--primary)' : 'var(--border)'};background:${active ? 'var(--primary)' : 'transparent'};color:${active ? 'var(--primary-foreground)' : 'var(--muted-foreground)'};cursor:pointer;font-size:0.82rem;font-weight:500;white-space:nowrap;`;
+        container.innerHTML = `
+            <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1.25rem;flex-wrap:wrap;">
+                <select id="aoty-songs-year" style="padding:0.3rem 0.6rem;border-radius:6px;border:1px solid var(--border);background:var(--background);color:var(--foreground);font-size:0.85rem;cursor:pointer;">
+                    ${years.map((y) => `<option value="${y}">${y}</option>`).join('')}
+                </select>
+                <button class="aoty-songs-mode" data-mode="community" style="${pill(true)}">Community</button>
+                <button class="aoty-songs-mode" data-mode="critics" style="${pill(false)}">Critics</button>
+            </div>
+            <div id="aoty-songs-content"></div>
+        `;
+        const contentDiv = container.querySelector('#aoty-songs-content');
+        let mode = 'community';
+        const setMode = (m) => {
+            mode = m;
+            for (const btn of container.querySelectorAll('.aoty-songs-mode')) {
+                const on = btn.dataset.mode === mode;
+                btn.style.background = on ? 'var(--primary)' : 'transparent';
+                btn.style.color = on ? 'var(--primary-foreground)' : 'var(--muted-foreground)';
+                btn.style.borderColor = on ? 'var(--primary)' : 'var(--border)';
+            }
+        };
+        const loadSongs = async (year) => {
+            contentDiv.innerHTML = `<div class="card-grid">${this.createSkeletonCards(6)}</div>`;
+            try {
+                const data =
+                    mode === 'critics'
+                        ? await fetchAOTY(`/songs/best?year=${year}`)
+                        : await fetchAOTY(`/songs/top?year=${year}`);
+                contentDiv.innerHTML = '';
+                if (data.songs?.length) {
+                    this.renderAOTYRankedRows(
+                        contentDiv,
+                        mode === 'critics' ? `Critics' Best Songs ${year}` : `Community Top Songs ${year}`,
+                        data.songs.map((s) => ({
+                            ...s,
+                            album: s.album || '',
+                            title: s.title || '',
+                        }))
+                    );
+                } else {
+                    contentDiv.innerHTML = createPlaceholder('No songs found.');
+                }
+            } catch (e) {
+                console.error(e);
+                contentDiv.innerHTML = createPlaceholder('Failed to load songs.');
+            }
+        };
+        for (const btn of container.querySelectorAll('.aoty-songs-mode')) {
+            btn.addEventListener('click', async () => {
+                setMode(btn.dataset.mode);
+                await loadSongs(container.querySelector('#aoty-songs-year').value);
+            });
+        }
+        container.querySelector('#aoty-songs-year').addEventListener('change', (e) => loadSongs(e.target.value));
+        await loadSongs(currentYear);
+    }
+
+    async renderAOTYSearch(container) {
+        container.innerHTML = `
+            <form id="aoty-search-form" style="display:flex;gap:0.5rem;margin-bottom:1.25rem;flex-wrap:wrap;">
+                <input id="aoty-search-q" type="search" placeholder="Search AOTY…" autocomplete="off"
+                    style="flex:1;min-width:200px;padding:0.45rem 0.8rem;border-radius:6px;border:1px solid var(--border);background:var(--background);color:var(--foreground);font-size:0.85rem;outline:none;">
+                <select id="aoty-search-scope" style="padding:0.3rem 0.6rem;border-radius:6px;border:1px solid var(--border);background:var(--background);color:var(--foreground);font-size:0.85rem;cursor:pointer;">
+                    <option value="albums">Albums</option>
+                    <option value="artists">Artists</option>
+                    <option value="labels">Labels</option>
+                    <option value="lists">Lists</option>
+                    <option value="news">News</option>
+                    <option value="tags">Tags</option>
+                    <option value="users">Users</option>
+                </select>
+                <button type="submit" style="padding:0.45rem 1.1rem;border-radius:6px;border:1px solid var(--primary);background:var(--primary);color:var(--primary-foreground);font-size:0.85rem;font-weight:600;cursor:pointer;">Search</button>
+            </form>
+            <div id="aoty-search-content"><div style="color:var(--muted-foreground);font-size:0.85rem;">Type above to search albumoftheyear.org.</div></div>
+        `;
+        const contentDiv = container.querySelector('#aoty-search-content');
+        const runSearch = async (q, scope) => {
+            if (!q.trim()) return;
+            contentDiv.innerHTML = `<div class="card-grid">${this.createSkeletonCards(8)}</div>`;
+            try {
+                const data = await fetchAOTY(`/search/${scope}?q=${encodeURIComponent(q.trim())}`);
+                contentDiv.innerHTML = '';
+                if (data.albums?.length) {
+                    updateAOTYMustHearIndex(data.albums);
+                    this.renderAOTYSection(contentDiv, `Albums matching “${q.trim()}”`, data.albums);
+                    return;
+                }
+                const rows =
+                    data.artists ||
+                    data.labels ||
+                    data.lists ||
+                    data.items ||
+                    data.news ||
+                    data.tags ||
+                    data.users ||
+                    [];
+                if (!rows.length) {
+                    contentDiv.innerHTML = createPlaceholder('No results found.');
+                    return;
+                }
+                const section = document.createElement('section');
+                section.className = 'content-section';
+                section.innerHTML = `<h2 class="section-title">Results for “${escapeHtml(q.trim())}”</h2>`;
+                const list = document.createElement('div');
+                for (const r of rows) {
+                    const name = r.name || r.title || r.username || r.tag || '';
+                    const sub = r.publication || r.artist || r.source || r.date || '';
+                    const img = r.image || r.cover || r.artistImage || '';
+                    const url = r.url || '';
+                    const aotyUrl = url.startsWith('http') ? url : `https://www.albumoftheyear.org${url}`;
+                    const el = document.createElement('div');
+                    el.style.cssText =
+                        'display:flex;align-items:center;gap:1rem;padding:0.75rem 0;border-bottom:1px solid var(--border);cursor:pointer;';
+                    el.innerHTML = `
+                        <img crossorigin="anonymous" referrerpolicy="no-referrer" src="${aotyCoverUrl(img) || 'images/monochrome_logo.svg'}" width="44" height="44"
+                            style="width:44px;height:44px;border-radius:6px;object-fit:cover;flex-shrink:0;background:var(--secondary);"
+                            loading="lazy" onerror="this.src='images/monochrome_logo.svg';this.onerror=null;">
+                        <div style="flex:1;min-width:0;">
+                            <div style="font-weight:500;font-size:0.875rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" class="row-title"></div>
+                            <div style="font-size:0.75rem;color:var(--muted-foreground);margin-top:2px;" class="row-meta"></div>
+                        </div>`;
+                    el.querySelector('.row-title').textContent = name;
+                    el.querySelector('.row-meta').textContent = sub;
+                    el.addEventListener('click', () => {
+                        if (scope === 'lists') {
+                            const slug = (url || '').split('/').filter(Boolean).pop() || '';
+                            if (slug) void this.showAOTYListModal(slug, name);
+                            else if (aotyUrl) window.open(aotyUrl, '_blank', 'noopener');
+                        } else if (aotyUrl) {
+                            window.open(aotyUrl, '_blank', 'noopener');
+                        }
+                    });
+                    list.appendChild(el);
+                }
+                section.appendChild(list);
+                contentDiv.appendChild(section);
+            } catch (e) {
+                console.error(e);
+                contentDiv.innerHTML = createPlaceholder('Search failed.');
+            }
+        };
+        container.querySelector('#aoty-search-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            void runSearch(
+                container.querySelector('#aoty-search-q').value,
+                container.querySelector('#aoty-search-scope').value
+            );
+        });
+    }
+
+    async renderAOTYShuffle(container) {
+        container.innerHTML = `
+            <div style="display:flex;gap:0.5rem;margin-bottom:1.5rem;flex-wrap:wrap;">
+                <button data-shuffle="musthear" style="padding:0.45rem 1.1rem;border-radius:2rem;border:1px solid var(--primary);background:var(--primary);color:var(--primary-foreground);font-size:0.85rem;font-weight:600;cursor:pointer;">Must-hear gem</button>
+                <button data-shuffle="album" style="padding:0.45rem 1.1rem;border-radius:2rem;border:1px solid var(--border);background:transparent;color:var(--muted-foreground);font-size:0.85rem;font-weight:600;cursor:pointer;">Random album</button>
+                <button data-shuffle="song" style="padding:0.45rem 1.1rem;border-radius:2rem;border:1px solid var(--border);background:transparent;color:var(--muted-foreground);font-size:0.85rem;font-weight:600;cursor:pointer;">Random song</button>
+            </div>
+            <div id="aoty-shuffle-content"><div style="color:var(--muted-foreground);font-size:0.85rem;">Feeling lucky? Pull a random pick from AOTY.</div></div>
+        `;
+        const contentDiv = container.querySelector('#aoty-shuffle-content');
+        const surprise = async (kind) => {
+            contentDiv.innerHTML = `<div class="card-grid">${this.createSkeletonCards(4)}</div>`;
+            try {
+                const path =
+                    kind === 'musthear' ? '/random/must-hear' : kind === 'song' ? '/random/song' : '/random/album';
+                // Random endpoints are never cached server-side, skip the client cache too.
+                const data = await fetchAOTY(path, { skipCache: true });
+                const isSong = kind === 'song' || data.song;
+                const pick = data.album || data.song || data;
+                contentDiv.innerHTML = '';
+                if (pick?.title || pick?.album) {
+                    if (isSong) {
+                        this.renderAOTYRankedRows(contentDiv, 'Your random pick', [
+                            { ...pick, album: pick.album || '', title: pick.title || '' },
+                        ]);
+                    } else if (pick.artist && (pick.title || pick.album)) {
+                        const album = { ...pick, title: pick.title || pick.album };
+                        updateAOTYMustHearIndex([album]);
+                        this.renderAOTYSection(contentDiv, 'Your random pick', [album]);
+                    } else {
+                        contentDiv.innerHTML = createPlaceholder('No pick returned.');
+                    }
+                } else {
+                    contentDiv.innerHTML = createPlaceholder('No pick returned.');
+                }
+            } catch (e) {
+                console.error(e);
+                contentDiv.innerHTML = createPlaceholder('Shuffle failed, try again.');
+            }
+        };
+        for (const btn of container.querySelectorAll('[data-shuffle]')) {
+            btn.addEventListener('click', () => surprise(btn.dataset.shuffle));
+        }
+        await surprise('musthear');
+    }
+
     async showAOTYListModal(slug, listTitle) {
         const body = document.createElement('div');
         body.innerHTML = `<div style="display:flex;flex-direction:column;gap:0;">
@@ -3480,7 +3996,7 @@ export class UIRenderer {
         const { modal } = createModal({ title: listTitle, content: body, className: 'extra-wide' });
 
         try {
-            const data = await fetchAOTY(`/list/${slug}`);
+            const data = await fetchAOTY(`/list/${encodeURIComponent(slug)}`);
             const items = data.items || [];
             const modalBody = modal.querySelector('.modal-body');
             modalBody.innerHTML = '';
@@ -3493,9 +4009,10 @@ export class UIRenderer {
             const list = document.createElement('div');
             list.style.cssText = 'display:flex;flex-direction:column;gap:0;';
 
-            const scoreTargets = []; // { item, scoreEl } — collected during loop for lazy fetch
+            const scoreTargets = []; // { item, scoreEl }, collected during loop for lazy fetch
 
             for (const item of items) {
+                const { artist: itemArtist, title: itemTitle, rank: itemRank } = aotyListItemParts(item);
                 const row = document.createElement('div');
                 row.style.cssText =
                     'display:flex;align-items:center;gap:1rem;padding:0.75rem 0;border-bottom:1px solid var(--border);cursor:pointer;';
@@ -3503,22 +4020,28 @@ export class UIRenderer {
                 const scoreEl = document.createElement('div');
                 scoreEl.style.cssText =
                     'font-size:0.8rem;font-weight:700;color:var(--primary-foreground);background:var(--primary);padding:2px 7px;border-radius:5px;flex-shrink:0;display:none;';
+                // Prefer the score already embedded by the API (spec shape); lazy-fetch only as fallback.
+                const embeddedScore = aotyScore(item.score ?? item.scoreExact);
+                if (embeddedScore != null) {
+                    scoreEl.textContent = String(embeddedScore);
+                    scoreEl.style.display = '';
+                }
 
                 row.innerHTML = `
-                    <span style="font-size:0.8rem;font-weight:700;color:var(--primary);min-width:2rem;text-align:right;flex-shrink:0;">#${escapeHtml(item.rank || '')}</span>
-                    <img crossorigin="anonymous" referrerpolicy="no-referrer" src="${aotyCoverUrl(item.cover) || 'assets/logo.svg'}" width="48" height="48"
+                    <span style="font-size:0.8rem;font-weight:700;color:var(--primary);min-width:2rem;text-align:right;flex-shrink:0;">#${escapeHtml(itemRank)}</span>
+                    <img crossorigin="anonymous" referrerpolicy="no-referrer" src="${aotyCoverUrl(item.cover) || 'images/monochrome_logo.svg'}" width="48" height="48"
                         style="border-radius:6px;object-fit:cover;flex-shrink:0;background:var(--secondary);"
-                        loading="lazy" onerror="this.src='assets/logo.svg';this.onerror=null;">
+                        loading="lazy" onerror="this.src='images/monochrome_logo.svg';this.onerror=null;">
                     <div style="flex:1;min-width:0;">
                         <div style="font-weight:500;font-size:0.875rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" class="row-title"></div>
                         <div style="font-size:0.75rem;color:var(--muted-foreground);margin-top:2px;" class="row-meta"></div>
                     </div>`;
 
-                row.querySelector('.row-title').textContent = item.title || '';
-                const metaParts = [item.date, ...(item.genres?.slice(0, 2) || [])].filter(Boolean);
+                row.querySelector('.row-title').textContent = itemTitle || item.title || '';
+                const metaParts = [itemArtist, item.date, ...(item.genres?.slice(0, 2) || [])].filter(Boolean);
                 row.querySelector('.row-meta').textContent = metaParts.join(' · ');
                 row.appendChild(scoreEl);
-                scoreTargets.push({ item, scoreEl });
+                if (embeddedScore == null) scoreTargets.push({ item, scoreEl });
 
                 const aotyItemUrl = item.url?.startsWith('http')
                     ? item.url
@@ -3528,7 +4051,7 @@ export class UIRenderer {
                     row.style.opacity = '0.5';
                     row.style.pointerEvents = 'none';
                     try {
-                        const found = await this.findAOTYAlbumInLibrary('', item.title || '');
+                        const found = await this.findAOTYAlbumInLibrary(itemArtist, itemTitle);
                         if (found) {
                             modal.remove();
                             navigate(`/album/${found.id}`);
@@ -3546,13 +4069,19 @@ export class UIRenderer {
 
             modalBody.appendChild(list);
 
-            // Lazy-load scores — uses direct element refs collected above, no DOM querying
+            // Lazy-load scores via the cheap summary endpoint, /album requires
+            // artist+name per openapi.json, so split the combined list title.
+            // Uses direct element refs collected above, no DOM querying
             for (const { item, scoreEl } of scoreTargets) {
-                if (!item.title) continue;
-                fetchAOTY(`/album?name=${encodeURIComponent(item.title)}&minimal=true`)
+                const { artist: lazyArtist, title: lazyTitle } = aotyListItemParts(item);
+                if (!lazyTitle || !lazyArtist) continue;
+                fetchAOTY(
+                    `/album/summary?artist=${encodeURIComponent(lazyArtist)}&name=${encodeURIComponent(lazyTitle)}&minimal=true`
+                )
                     .then((d) => {
-                        if (d.criticScore && d.criticScore !== 'NR') {
-                            scoreEl.textContent = d.criticScore;
+                        const s = aotyScore(d?.criticScore);
+                        if (s != null) {
+                            scoreEl.textContent = String(s);
                             scoreEl.style.display = '';
                         }
                     })
@@ -3636,11 +4165,13 @@ export class UIRenderer {
     createAOTYAlbumCardHTML(album, isUpcoming = false) {
         const title = escapeHtml(album.title || 'Unknown Album');
         const artist = escapeHtml(album.artist || '');
-        const cover = `<img crossorigin="anonymous" referrerpolicy="no-referrer" src="${aotyCoverUrl(album.cover) || 'assets/logo.svg'}" alt="${title}" class="card-image" loading="lazy" onerror="this.src='assets/logo.svg'">`;
+        const cover = `<img crossorigin="anonymous" referrerpolicy="no-referrer" src="${aotyCoverUrl(album.cover) || 'images/monochrome_logo.svg'}" alt="${title}" class="card-image" loading="lazy" onerror="this.src='images/monochrome_logo.svg'">`;
 
+        const critic = aotyScore(album.criticScore);
+        const user = aotyScore(album.userScore);
         const scoreParts = [];
-        if (album.criticScore) scoreParts.push(`${album.criticScore} critic`);
-        if (album.userScore) scoreParts.push(`${album.userScore} user`);
+        if (critic != null) scoreParts.push(`${critic} critic`);
+        if (user != null) scoreParts.push(`${user} user`);
         const scores = scoreParts.join(' · ');
 
         const subtitleParts = [artist, scores].filter(Boolean);
@@ -4337,7 +4868,17 @@ export class UIRenderer {
         const url = typeof result === 'string' ? result : result.videoUrl || result.hlsUrl;
         if (!url) return;
 
-        if (url.endsWith('.m3u8')) {
+        video._hls?.destroy();
+        video._hls = null;
+
+        let isHls = false;
+        try {
+            isHls = new URL(url, globalThis.location?.href || 'http://localhost').pathname.endsWith('.m3u8');
+        } catch {
+            isHls = url.includes('.m3u8');
+        }
+
+        if (isHls) {
             const Hls = (await import('hls.js')).default;
             if (Hls.isSupported()) {
                 const hls = new Hls();
@@ -4345,6 +4886,7 @@ export class UIRenderer {
                 hls.loadSource(url);
                 hls.attachMedia(video);
                 hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                    if (!video.autoplay) return;
                     video.play().catch((e) => {
                         console.warn('Autoplay failed, muted play might be required:', e);
                         video.muted = true;
@@ -4354,8 +4896,9 @@ export class UIRenderer {
                 hls.on(Hls.Events.ERROR, (_event, data) => {
                     if (data.fatal) {
                         console.warn('HLS fatal error:', data.type);
-                        video.replaceWith(fallbackImg);
+                        if (fallbackImg) video.replaceWith(fallbackImg);
                         hls.destroy();
+                        if (video._hls === hls) video._hls = null;
                     }
                 });
             } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
@@ -4363,31 +4906,33 @@ export class UIRenderer {
                 try {
                     video.src = url;
                 } catch {
-                    video.replaceWith(fallbackImg);
+                    if (fallbackImg) video.replaceWith(fallbackImg);
                 }
             } else {
-                video.replaceWith(fallbackImg);
+                if (fallbackImg) video.replaceWith(fallbackImg);
             }
         } else {
             // MP4
             try {
                 video.src = url;
             } catch {
-                video.replaceWith(fallbackImg);
+                if (fallbackImg) video.replaceWith(fallbackImg);
                 return;
             }
-            video.play().catch((e) => {
-                console.warn('MP4 autoplay failed:', e);
-                video.muted = true;
-                video.play().catch(() => {});
-            });
+            if (video.autoplay) {
+                video.play().catch((e) => {
+                    console.warn('MP4 autoplay failed:', e);
+                    video.muted = true;
+                    video.play().catch(() => {});
+                });
+            }
         }
         video.onerror = async () => {
             if (result.hlsUrl) {
                 // HLS fallback (for some reason alot of animated covers js dont work on MP4 lol)
                 await this.setupHlsVideo(video, { videoUrl: null, hlsUrl: result.hlsUrl }, fallbackImg);
             } else {
-                video.replaceWith(fallbackImg);
+                if (fallbackImg) video.replaceWith(fallbackImg);
             }
         };
     }
@@ -4465,21 +5010,78 @@ export class UIRenderer {
 
         this.setupSearchTabsLazyLoad();
 
-        this._searchState = {
-            query,
-            signal,
-            provider: this.api.getCurrentProvider(),
-            tracks: null,
-            artists: null,
-            albums: null,
-            playlists: null,
-            communityPlaylists: null,
-            artistsEnriched: false,
-            rendered: {},
-        };
+        try {
+            const provider = this.api.getCurrentProvider();
+            const results = await this.api.search(query, { signal, provider, enrichArtists: false });
 
-        const activeTab = document.querySelector('#page-search .search-tab.active')?.dataset.tab || 'tracks';
-        await this.renderSearchTab(activeTab);
+            let finalTracks = (results.tracks && results.tracks.items) || [];
+            let finalVideos = (results.videos && results.videos.items) || [];
+            let finalArtists = (results.artists && results.artists.items) || [];
+            let finalAlbums = (results.albums && results.albums.items) || [];
+            let finalPlaylists = (results.playlists && results.playlists.items) || [];
+
+            if (
+                finalArtists.length === 0 &&
+                finalTracks.length > 0 &&
+                !finalTracks.some((track) => track.provider === 'apple')
+            ) {
+                const artistMap = new Map();
+                finalTracks.forEach((track) => {
+                    if (track.artist && !artistMap.has(track.artist.id)) {
+                        artistMap.set(track.artist.id, track.artist);
+                    }
+                    if (track.artists) {
+                        track.artists.forEach((artist) => {
+                            if (!artistMap.has(artist.id)) {
+                                artistMap.set(artist.id, artist);
+                            }
+                        });
+                    }
+                });
+                finalArtists = Array.from(artistMap.values());
+            }
+
+            if (
+                finalAlbums.length === 0 &&
+                finalTracks.length > 0 &&
+                !finalTracks.some((track) => track.provider === 'apple')
+            ) {
+                const albumMap = new Map();
+                finalTracks.forEach((track) => {
+                    if (track.album && !albumMap.has(track.album.id)) {
+                        albumMap.set(track.album.id, track.album);
+                    }
+                });
+                finalAlbums = Array.from(albumMap.values());
+            }
+
+            finalTracks = finalTracks.filter((t) => !_isBlockedCopyright(t.copyright));
+            finalVideos = finalVideos.filter((t) => !_isBlockedCopyright(t.copyright));
+            finalAlbums = finalAlbums.filter((t) => !_isBlockedCopyright(t.copyright));
+
+            this._searchState = {
+                query,
+                tracks: finalTracks,
+                videos: finalVideos,
+                artists: finalArtists,
+                albums: finalAlbums,
+                playlists: finalPlaylists,
+                artistsEnriched: false,
+                rendered: {},
+            };
+
+            const activeTab = document.querySelector('#page-search .search-tab.active')?.dataset.tab || 'tracks';
+            await this.renderSearchTab(activeTab);
+        } catch (error) {
+            if (error.name === 'AbortError') return;
+            console.error('Search failed:', error);
+            const errorMsg = createPlaceholder(`Error during search. ${error.message}`);
+            tracksContainer.innerHTML = errorMsg;
+            artistsContainer.innerHTML = errorMsg;
+            albumsContainer.innerHTML = errorMsg;
+            playlistsContainer.innerHTML = errorMsg;
+            podcastsContainer.innerHTML = errorMsg;
+        }
     }
 
     setupSearchTabsLazyLoad() {
@@ -4626,7 +5228,11 @@ export class UIRenderer {
 
     async _renderSearchArtists(state) {
         const artistsContainer = document.getElementById('search-artists-container');
-        if (!state.artistsEnriched && state.artists.length) {
+        if (
+            !state.artistsEnriched &&
+            state.artists.length &&
+            !state.artists.some((artist) => artist.provider === 'apple')
+        ) {
             try {
                 state.artists = await this.api.tidalAPI.enrichArtistsWithPicture(state.artists);
             } catch (e) {
@@ -4734,6 +5340,44 @@ export class UIRenderer {
                 this.renderSearchHistory();
             });
         }
+    }
+
+    renderSearchSuggestions(suggestions, onSelect) {
+        const historyEl = document.getElementById('search-history');
+        if (!historyEl) return;
+        if (suggestions.length === 0) {
+            historyEl.style.display = 'none';
+            return;
+        }
+
+        historyEl.innerHTML = suggestions
+            .map(
+                (suggestion, index) => `
+                <div class="search-history-item search-suggestion-item" role="option"
+                     data-suggestion-index="${index}">
+                    ${
+                        suggestion.kind === 'song'
+                            ? `<img crossorigin="anonymous" src="${escapeHtml(suggestion.image)}" alt="" class="search-suggestion-cover">`
+                            : SVG_SEARCH(16)
+                    }
+                    <span class="query-text">
+                        <span class="search-suggestion-title">${escapeHtml(suggestion.displayTerm)}</span>
+                        ${
+                            suggestion.kind === 'song'
+                                ? `<span class="search-suggestion-subtitle">${escapeHtml(suggestion.subtitle)}${suggestion.lyricSnippet ? ` · Lyrics: “${escapeHtml(suggestion.lyricSnippet)}”` : ''}</span>`
+                                : ''
+                        }
+                    </span>
+                </div>
+            `
+            )
+            .join('');
+        historyEl.style.display = 'block';
+
+        historyEl.querySelectorAll('.search-suggestion-item').forEach((item) => {
+            item.addEventListener('mousedown', (event) => event.preventDefault());
+            item.addEventListener('click', () => onSelect(suggestions[Number(item.dataset.suggestionIndex)]));
+        });
     }
 
     removeFromSearchHistory(query) {
@@ -4954,7 +5598,7 @@ export class UIRenderer {
                         titleEl.appendChild(badge);
                     }
 
-                    // Label — append to producer line
+                    // Label, append to producer line
                     if (data.label) {
                         const labelUrl = data.labelUrl
                             ? data.labelUrl.startsWith('http')
@@ -4967,14 +5611,14 @@ export class UIRenderer {
                         prodEl.innerHTML += ` · ${labelLink}`;
                     }
 
-                    // Critic score
-                    const critScore = data.criticScore;
-                    const critCount = data.criticCount;
+                    // Critic score, spec: integer|null, live: "82" | "NR" | null
+                    const critScore = aotyScore(data.criticScore);
+                    const critCount = aotyCount(data.criticCount);
                     const reviews = data.reviews || [];
-                    if (!critScore || critScore === 'NR') {
+                    if (critScore == null) {
                         rateCriticsEl.innerHTML = `<span style="color:var(--muted-foreground);">Critic Score: NR</span>`;
                     } else {
-                        rateCriticsEl.innerHTML = `<a href="javascript:void(0)" style="color:var(--muted-foreground);cursor:pointer;">Critic Score: ${critScore}${critCount ? ` · <span style="text-decoration:underline;">${critCount} reviews</span>` : ''}</a>`;
+                        rateCriticsEl.innerHTML = `<a href="javascript:void(0)" style="color:var(--muted-foreground);cursor:pointer;">Critic Score: ${critScore}${critCount != null ? ` · <span style="text-decoration:underline;">${critCount} reviews</span>` : ''}</a>`;
                         rateCriticsEl.querySelector('a').onclick = () => {
                             const con = document.createElement('div');
                             con.style.cssText = 'display:flex;flex-direction:column;gap:1.5rem;';
@@ -4991,11 +5635,11 @@ export class UIRenderer {
                                 const quote = decodeHtml(review.text || 'No review text available.');
                                 reviewdiv.innerHTML = `
                                 <img crossorigin="anonymous" src="${review.image || ''}" width="50" height="50" style="border-radius:8px;object-fit:cover;background:var(--highlight);flex-shrink:0;"
-                                     onerror="this.src='images/monochrome-logo.svg';this.onerror=null;" loading="lazy" referrerpolicy="no-referrer">
+                                     onerror="this.src='images/monochrome_logo.svg';this.onerror=null;" loading="lazy" referrerpolicy="no-referrer">
                                 <div style="flex:1;">
                                     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:0.25rem;">
                                         <div class="pub-name" style="font-weight:600;color:var(--foreground);"></div>
-                                        <div style="font-weight:bold;color:var(--primary-foreground);background:var(--primary);padding:2px 10px;border-radius:6px;font-size:0.85rem;">${review.score || ''}</div>
+                                        <div style="font-weight:bold;color:var(--primary-foreground);background:var(--primary);padding:2px 10px;border-radius:6px;font-size:0.85rem;">${aotyScore(review.score) ?? ''}</div>
                                     </div>
                                     <div class="author-name" style="font-size:0.8rem;color:var(--muted-foreground);margin-bottom:0.5rem;"></div>
                                     <div class="quote-text" style="font-size:0.95rem;line-height:1.5;color:var(--muted-foreground);font-style:italic;"></div>
@@ -5014,14 +5658,14 @@ export class UIRenderer {
                         };
                     }
 
-                    // User score
-                    const userScore = data.userScore;
-                    const userCount = data.userCount;
-                    if (!userScore || userScore === 'NR') {
+                    // User score, spec: integer|null, live: "80" | "NR" | null
+                    const userScore = aotyScore(data.userScore);
+                    const userCount = aotyCount(data.userCount);
+                    if (userScore == null) {
                         rateUsersEl.innerHTML = `<span style="color:var(--muted-foreground);">User Score: NR</span>`;
                     } else {
                         const userLink = aotyUrl ? `href="${aotyUrl}" target="_blank" rel="noopener"` : '';
-                        rateUsersEl.innerHTML = `<a ${userLink} style="color:var(--muted-foreground);">User Score: <span style="text-decoration:underline;">${userScore}</span>${userCount ? ` · ${userCount} ratings` : ''}</a>`;
+                        rateUsersEl.innerHTML = `<a ${userLink} style="color:var(--muted-foreground);">User Score: <span style="text-decoration:underline;">${userScore}</span>${userCount != null ? ` · ${userCount} ratings` : ''}</a>`;
                     }
                 })
                 .catch(() => {
@@ -5054,6 +5698,7 @@ export class UIRenderer {
                 const isLiked = await db.isFavorite('album', album.id);
                 albumLikeBtn.innerHTML = this.createHeartIcon(isLiked);
                 albumLikeBtn.classList.toggle('active', isLiked);
+                trackDataStore.set(albumLikeBtn, album);
             }
 
             // Store album data for menu button
@@ -5581,6 +6226,7 @@ export class UIRenderer {
                     playlistLikeBtn.innerHTML = this.createHeartIcon(isLiked);
                     playlistLikeBtn.classList.toggle('active', isLiked);
                     playlistLikeBtn.style.display = 'flex';
+                    trackDataStore.set(playlistLikeBtn, playlist);
                 }
 
                 // Show/hide Delete button
@@ -5701,55 +6347,8 @@ export class UIRenderer {
                 // Try to get cover from first track album
                 if (tracks.length > 0 && tracks[0].album?.cover) {
                     const firstTrack = tracks[0];
-                    let videoCoverUrl =
+                    const videoCoverUrl =
                         firstTrack.videoUrl || firstTrack.videoCoverUrl || firstTrack.album?.videoCoverUrl || null;
-
-                    if (!videoCoverUrl && (firstTrack.album || firstTrack.type === 'video')) {
-                        const fetchArtwork = () => {
-                            this.api
-                                .getVideoArtwork(firstTrack.title, getTrackArtists(firstTrack))
-                                .then(async (result) => {
-                                    if (result && this.currentPage === 'mix' && this.currentMixId === mixId) {
-                                        const url = result.videoUrl || result.hlsUrl;
-                                        if (!url) return;
-                                        firstTrack.album = firstTrack.album || {};
-                                        firstTrack.album.videoCoverUrl = url;
-                                        const currentImageEl = document.getElementById('mix-detail-image');
-                                        if (currentImageEl && currentImageEl.tagName !== 'VIDEO') {
-                                            const video = document.createElement('video');
-                                            video.autoplay = true;
-                                            video.loop = true;
-                                            video.muted = true;
-                                            video.playsInline = true;
-                                            video.preload = 'auto';
-                                            video.className = currentImageEl.className;
-                                            video.id = currentImageEl.id;
-                                            video.style.opacity = '1';
-                                            video.poster = currentImageEl.src;
-
-                                            await this.setupHlsVideo(video, result, currentImageEl);
-                                            currentImageEl.replaceWith(video);
-                                        }
-                                    }
-                                });
-                        };
-
-                        if (firstTrack.type === 'video') {
-                            await this.api
-                                .getVideoStreamUrl(firstTrack.id)
-                                .then(async (url) => {
-                                    if (url) {
-                                        firstTrack.videoUrl = url;
-                                        await this.renderMixPage(mixId);
-                                    } else {
-                                        fetchArtwork();
-                                    }
-                                })
-                                .catch(fetchArtwork);
-                        } else {
-                            fetchArtwork();
-                        }
-                    }
 
                     const coverUrl = videoCoverUrl || this.api.getCoverUrl(firstTrack.album.cover);
 
@@ -5928,39 +6527,6 @@ export class UIRenderer {
         }
 
         try {
-            const currentId = this.currentArtistId;
-            this.api
-                .getArtistBanner(artist.name)
-                .then(async (banner) => {
-                    if (this.currentArtistId !== currentId) return;
-
-                    if (banner && banner.hlsUrl && bannerContainer) {
-                        const video = document.createElement('video');
-                        video.autoplay = true;
-                        video.loop = true;
-                        video.muted = true;
-                        video.playsInline = true;
-                        video.setAttribute('muted', '');
-                        video.setAttribute('autoplay', '');
-                        video.setAttribute('playsinline', '');
-                        video.style.opacity = '1';
-
-                        try {
-                            await this.setupHlsVideo(video, banner, null);
-                            if (this.currentArtistId === currentId) {
-                                bannerContainer.appendChild(video);
-                                bannerContainer.style.opacity = '1';
-                                video.play().catch(() => {});
-                            }
-                        } catch (e) {
-                            console.warn('Failed to setup artist banner video:', e);
-                        }
-                    }
-                })
-                .catch((e) => {
-                    console.warn('Failed to fetch artist banner:', e);
-                });
-
             // Handle Biography
             if (bioEl) {
                 // Pre-define regex patterns for better performance
@@ -7150,11 +7716,22 @@ export class UIRenderer {
         const albumSection = document.getElementById('track-album-section');
         const albumTracksContainer = document.getElementById('track-detail-album-tracks');
         const similarSection = document.getElementById('track-similar-section');
+        const similarTracksContainer = document.getElementById('track-detail-similar-tracks');
 
         const playBtn = document.getElementById('play-track-btn');
         const likeBtn = document.getElementById('like-track-btn');
 
-        if (!imageEl || !titleEl || !artistEl || !albumEl || !yearEl || !albumTracksContainer) {
+        if (
+            !imageEl ||
+            !titleEl ||
+            !artistEl ||
+            !albumEl ||
+            !yearEl ||
+            !albumSection ||
+            !albumTracksContainer ||
+            !similarSection ||
+            !similarTracksContainer
+        ) {
             console.warn('Track page elements missing; aborting renderTrackPage');
             return;
         }
@@ -7166,6 +7743,7 @@ export class UIRenderer {
         albumEl.innerHTML = '';
         yearEl.innerHTML = '';
         albumTracksContainer.innerHTML = this.createSkeletonTracks(5, false);
+        similarTracksContainer.innerHTML = this.createSkeletonTracks(5, true);
         albumSection.style.display = 'none';
         similarSection.style.display = 'none';
 
@@ -7299,11 +7877,33 @@ export class UIRenderer {
                 likeBtn.classList.toggle('active', isLiked);
             }
 
-            if (track.album?.id) {
-                const { tracks } = await this.api.getAlbum(track.album.id);
-                if (tracks && tracks.length > 0) {
-                    albumSection.style.display = 'block';
-                    await this.renderListWithTracks(albumTracksContainer, tracks, false);
+            const albumRequest = track.album?.id ? this.api.getAlbum(track.album.id) : Promise.resolve({ tracks: [] });
+            const recommendationRequest = track.isLocal
+                ? Promise.resolve([])
+                : this.api.getRecommendedTracksForPlaylist([track], 12);
+            const [albumResult, recommendationResult] = await Promise.allSettled([albumRequest, recommendationRequest]);
+
+            if (this.currentPage !== 'track' || this.currentTrackPageId !== track.id) return;
+
+            const albumTracks = albumResult.status === 'fulfilled' ? albumResult.value?.tracks || [] : [];
+            if (albumResult.status === 'rejected') {
+                console.warn('Failed to load more tracks from album:', albumResult.reason);
+            } else if (albumTracks.length > 0) {
+                albumSection.style.display = 'block';
+                await this.renderListWithTracks(albumTracksContainer, albumTracks, false);
+            }
+
+            if (recommendationResult.status === 'rejected') {
+                console.warn('Failed to load similar tracks:', recommendationResult.reason);
+            } else {
+                const excludedIds = new Set([track.id, ...albumTracks.map((albumTrack) => albumTrack.id)].map(String));
+                const recommendations = contentBlockingSettings
+                    .filterTracks(recommendationResult.value || [])
+                    .filter((recommendedTrack) => !excludedIds.has(String(recommendedTrack.id)))
+                    .slice(0, 10);
+                if (recommendations.length > 0) {
+                    similarSection.style.display = 'block';
+                    await this.renderListWithTracks(similarTracksContainer, recommendations, true, false, false, true);
                 }
             }
 

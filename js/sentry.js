@@ -5,7 +5,7 @@ import { analyticsSettings } from './storage.js';
 export const SENTRY_DSN = 'https://33e55746a9904532835bee180d60d9b1@rustrak-api.edideaur.works/2';
 
 // Bump this on every release so Rustrak groups errors per deploy.
-const RELEASE = '5.0.5';
+const RELEASE = '5.0.7';
 
 /**
  * Errors raised by scripts injected into users' browsers by malicious
@@ -125,7 +125,7 @@ const IGNORE_ERRORS = [
     /Failed to fetch \(lyrics/i,
     /lyricsplus|lyrics-api\.binimum|lyrics-storage\.binimum|unison\.boidu\.dev/,
     // Third-party CDN/proxy fetch failures outside our control.
-    /Failed to fetch \((resources\.tidal\.com|dzr\.|tabs-vs-spaces\.wtf|canine\.tools|trends\.artistgrid\.cx|tidal-proxy\.monochrome\.tf|panora-api|aoty\.|127\.0\.0\.1)/i,
+    /Failed to fetch \((tracks\.monochrome\.st|resources\.tidal\.com|dzr\.|tabs-vs-spaces\.wtf|canine\.tools|trends\.artistgrid\.cx|tidal-proxy\.monochrome\.tf|panora-api|aoty\.|127\.0\.0\.1)/i,
     /^Failed to fetch\([^)]*\)$/,
     /^TypeError: Failed to fetch$/,
     /^TypeError: Load failed$/,
