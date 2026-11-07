@@ -204,6 +204,7 @@ export enum BulkDownloadMethod {
 }
 
 export const modernSettings = new ModernSettings()
+    .addProperty('bulkDownloadFolder', null as FileSystemDirectoryHandle | null)
     .addProperty('forceZipBlob', false, {
         legacy: {
             key: 'bulk-download-force-zip-blob',
@@ -262,6 +263,9 @@ export const modernSettings = new ModernSettings()
     })
     .addProperty('writeArtistsSeparately', false)
     .finalize() as ModernSettings & {
+    /** The last used directory handle for bulk downloads */
+    bulkDownloadFolder: FileSystemDirectoryHandle | null;
+
     /** Force ZIP blobs for bulk downloads even if file system APIs are available */
     forceZipBlob: boolean;
 
